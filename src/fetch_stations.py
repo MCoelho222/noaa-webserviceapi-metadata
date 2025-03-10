@@ -1,6 +1,6 @@
 from typing import Optional
 
-from src.fetch.utils.params import build_query_string
+from utils.params import build_query_string
 from request import send_get_request
 
 

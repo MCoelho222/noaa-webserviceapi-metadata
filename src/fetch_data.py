@@ -3,7 +3,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from request import send_get_request
-from src.fetch.utils.params import build_query_string
+from utils.params import build_query_string
 from utils.log import build_log_info
 from whitelist import retrieve_whitelist
 
@@ -154,7 +154,7 @@ async def fetch_stations_by_location(
             if stations_count == len(stationids) - 1:
                 is_complete = True
 
-            result = await send_get_request('data', q_string, whitelist_path, is_complete)
+            result = await send_get_request('data', q_string, whitelist_path, "locationid", "stationid", is_complete)
             
             data = None
 
@@ -175,7 +175,106 @@ async def fetch_stations_by_location(
             logger.debug(log_content)
     return complete_dataset
 
-# if __name__ == "__main__":
-#     import asyncio
+if __name__ == "__main__":
+    import asyncio
+    import numpy as np
 
+    from fetch_locations import fetch_locations
+    from fetch_stations import fetch_stations
+    from utils.response import process_response
+    from utils.params import calculate_offsets
+
+    async def main():
+        WHITELIST_PATH = "whitelist.json"
+        datasetid = "GSOM"
+        locationcategoryid = "CNTRY"
+        startdate = "2020-01-01"
+        enddate = "2025-03-07"
+        limit = 1000
+
+        # Get all the available locations in the 'CNTRY' category within the specified time range
+        locations = await fetch_locations(datasetid=datasetid, locationcategoryid=locationcategoryid, startdate=startdate, enddate=enddate, limit=limit)
+
+        if locations:
+            ids_names_dict = process_response(locations, "ids_names_dict")
+
+            # Ordered list of unique location IDs
+            locations_list = np.unique([location["id"] for location in locations["results"]])
+
+        else:
+            logger.debug("No locations found")
+
+        locations_batch = locations_list[0:5]  # Start with the first 5 locations
+
+        for locationid in locations_batch:
+            # Retrieve the whitelist for the current location
+            try:
+                whitelist = retrieve_whitelist(WHITELIST_PATH, locationid)
+            except FileNotFoundError:
+                whitelist = None
+
+            offsets = [0]  # Initial offsets (0 fetches all)
+
+            # If there's no whitelist for this location,
+            # or despite existing it's incomplete, fetch for available stations
+            if not whitelist or (whitelist and whitelist["metadata"] == "I"):
+                # Make a initial fetch and check the metadata to find out the number of available stations
+                stations = await fetch_stations(datasetid=datasetid, locationid=locationid)
+
+                if stations:
+                    stations_metadata = stations["metadata"]
+
+                    count = int(stations_metadata["resultset"]["count"])
+
+                # If there are more than 1000, calculate the offsets for fetching stations in smaller steps
+                if count > 1000:
+                    offsets = calculate_offsets(count)
+
+                    log_content = build_log_info(
+                        params=[
+                            ("Stations", count),
+                            ("Offsets", len(offsets))
+                            ]
+                        )
+                    logger.info(log_content)
+
+                # Fetch available station using offsets
+                stations = []
+                for offset in offsets:
+                    station_ids = await fetch_stations(datasetid=datasetid, locationid=locationid, offset=offset)
+                    if station_ids and "results" in station_ids.keys():
+                        stations.extend([station['id'] for station in station_ids["results"]])
+
+                unique_stations_ids = np.unique(stations)  # Ordered list of unique stations
+
+            elif whitelist and whitelist["metadata"] == "C":
+                unique_stations_ids = whitelist[locationid]
+
+            # Fetch data from stations
+            if len(unique_stations_ids) > 0:
+                data = await fetch_stations_by_location(
+                    datasetid=datasetid,
+                    startdate=startdate,
+                    enddate=enddate,
+                    locationid=locationid,
+                    stationids=unique_stations_ids,
+                    whitelist_path=WHITELIST_PATH,
+                    )
+
+                if data:
+                    log_content = build_log_info(
+                        params=[
+                            ("Country", ids_names_dict[locationid]),
+                                ("Stations count", len(unique_stations_ids)),
+                                ("Total rows", len(data))
+                                ]
+                        )
+                    logger.success(log_content)
+                else:
+                    logger.debug("Empty data")
     
+    asyncio.run(main())
+
+
+
+            

@@ -6,7 +6,7 @@ from loguru import logger
 from typing import Optional
 
 from utils.log import build_log_info
-from src.fetch.utils.params import build_query_string, get_params_from_url
+from utils.params import build_query_string, get_params_from_url
 from whitelist import add_to_whitelist
 
 load_dotenv()

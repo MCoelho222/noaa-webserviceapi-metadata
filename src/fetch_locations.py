@@ -1,7 +1,7 @@
 from typing import Optional
 
 from request import send_get_request
-from src.fetch.utils.params import build_query_string
+from utils.params import build_query_string
 
 
 async def fetch_locations(
