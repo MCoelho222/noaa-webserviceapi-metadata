@@ -1,32 +1,37 @@
 import numpy as np
 from typing import Optional
 
+
 def build_query_string(params: dict[str, str]) -> str:
     """Build a query string from a dictionary of non-none parameters."""
     return "&".join([f"{key}={value}" for key, value in params.items() if value])
 
 
-def get_params_from_url(url: str, target_params: Optional[list[str]] = None) -> dict[str, str]:
+def get_params_from_url(url: str, target_params: Optional[list[str]] = None, mode: Optional[str]="dict") -> dict[str, str] | list[tuple[str, str]]:
     """Extract specified query parameters from a URL.
 
     Args:
-        target_params (list[str] | None): The list with parameters' names (e.g., ['stationid', 'locationid'])
+        target_params (list[str] | None): The list with parameters' names (e.g., ['stationid', 'itemid'])
         url (str): The URL with query parameters
+        mode (str): The return mode. If
+            'dict', returns a dictionary with the query parameter as key:value. Default is 'dict'.
+            'list', returns a list of tuples. Default is 'dict'.
 
     Returns:
-        dict[str, str]: A dictionary with the query parameter as key:value (e.g., {'stationid': 'ABC123', 'locationid': 'FIPS:BR'}).
+        dict[str, str] | list[tuple[str, str]]: A dictionary with the query parameter as key:value.
             If target_params is None, returns a dictionary with all the query parameters.
+            If mode is 'list', returns a list of tuples.
     """
     # Exract params from URL
-    q_params = url.split('?')[1].split('&')
-
-
-    parsed_params = {}  # Initialize the dictionary of parameters
-
+    url_split_len = len(url.split('?'))
+    q_params = url.split('?')[1].split('&') if url_split_len > 1 else url.split('?')[0].split('&')
+    parsed_params = {} if mode == "dict" else [] # Initialize the dictionary of parameters
     # Iterate through the list of URL parameters
     for param in q_params:
         key_value = param.split('=')
-
+        if mode == "list":
+            parsed_params.append((key_value[0], key_value[1]))
+            continue
         # If target_params is not None and the URL param is in the targets list
         if target_params and key_value[0] in target_params:
             # Include in the dictionary
@@ -73,8 +78,8 @@ if __name__ == "__main__":
 
     # Test get_params_from_url
     print(get_params_from_url(url, ['stationid']))
-    print(get_params_from_url(url=url))
+    print(get_params_from_url(url=url, mode="list"))
     
     # Test calculate offsets
-    print(build_query_string({'stationid': 'ABC123', 'locationid': 'FIPS:BR'}))
+    print(build_query_string({'stationid': 'ABC123', 'itemid': 'FIPS:BR'}))
     print((calculate_offsets(18329)))

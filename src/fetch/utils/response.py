@@ -1,7 +1,6 @@
 import numpy as np
+from loguru import logger
 
-from custom_log import custom_logger, build_log_info
-from src.logs import LogLevel
 
 def process_response(response: dict[str, str], target: str) -> np.ndarray | dict[str, str] | list[str]:
     """Process the response fetched from the NOAA API."
@@ -13,10 +12,8 @@ def process_response(response: dict[str, str], target: str) -> np.ndarray | dict
     """
     try:
         if target == "metadata":
-            # Return the metadata
             return response["metadata"]
         elif target == 'results':
-            # Return the list of response
             return response["results"]
         elif target == 'ids':
             # Return ordered list of unique location IDs
@@ -31,9 +28,7 @@ def process_response(response: dict[str, str], target: str) -> np.ndarray | dict
             # Return dictionary with location names as keys and location IDs as values
             return {location["name"]: location["id"] for location in response["results"]}
         else:
-            log_data = build_log_info(context="Failed to process response", msg="Invalid target")
-            custom_logger(log_data, LogLevel.DEBUG)
+            logger.error("Failed to process response, Invalid target")
             return response
     except KeyError:
-        log_data = build_log_info(context="Failed to process response", msg="KeyError")
-        custom_logger(log_data, LogLevel.EXCEPTION)
+        logger.exception("Failed to process response, KeyError")

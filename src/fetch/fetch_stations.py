@@ -1,9 +1,7 @@
 from typing import Optional
 
-from logs import LogLevel
-from utils.request import build_query_string
-from request import make_http_request
-from custom_log import custom_logger, build_log_info
+from src.fetch.utils.params import build_query_string
+from request import send_get_request
 
 
 async def fetch_stations(
@@ -17,8 +15,7 @@ async def fetch_stations(
     sortfield: Optional[str]=None,
     sortorder: Optional[str]=None,
     limit: Optional[str]=1000,
-    offset: Optional[int]=0,
-    verbose:Optional[bool]=0) -> dict[str, str] | None:
+    offset: Optional[int]=0) -> dict[str, str] | None:
     """Download the available stations according to the specified parameters.
 
     Args:
@@ -33,7 +30,6 @@ async def fetch_stations(
         sortorder (str, optional): The order to sort the results.
         limit (int, optional): The limit parameter as specified in the NOAA Web Service API documentation.
         offset (int, optional): The offset parameter as specified in the NOAA Web Service API documentation.
-        verbose (bool, optional): The verbosity flag.
 
     Returns:
         Optional[dict[str, str]]: A dictionary with 'metadata' and 'results' keys or None.
@@ -54,15 +50,7 @@ async def fetch_stations(
     q_string = build_query_string(all_params)
 
     # Fetch station's endpoint
-    data = await make_http_request("stations", q_string)
-
-    if verbose and data and "metadata" in data.keys():
-        metadata = data["metadata"]
-        log_data = build_log_info(
-            context="Fetch stations",
-            params=[("Items", f"{len(data['results'])}/{metadata["count"]}"),]
-        )
-        custom_logger(log_data, LogLevel.INFO)
+    data = await send_get_request("stations", q_string)
 
     return data 
 
@@ -70,12 +58,9 @@ if __name__ == "__main__":
     import asyncio
 
     async def main():
-        # Test
-        stations = await fetch_stations(dataset_id='GSOM', location_id='FIPS:BR')
+        stations = await fetch_stations(datasetid='GSOM', locationid='FIPS:BR')
         if stations:
             print(stations["metadata"])
-            print(len(stations["results"]))
-            stations = await fetch_stations(dataset_id='GSOM', location_id='FIPS:BR')
-            print(type(stations))
+            print(f"Total stations: {len(stations["results"])}")
     
     asyncio.run(main())

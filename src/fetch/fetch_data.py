@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Any, Optional
+from loguru import logger
 
-from src.logs import LogLevel
-from utils.request import build_query_string, make_http_request
-from custom_log import custom_logger, build_log_info
+from request import send_get_request
+from src.fetch.utils.params import build_query_string
+from utils.log import build_log_info
 from whitelist import retrieve_whitelist
 
 async def fecth_data(
@@ -18,8 +19,7 @@ async def fecth_data(
     sortorder: Optional[str]=None,
     limit: Optional[str]=1000,
     offset: Optional[int]=0,
-    includemetadata: Optional[bool]=True,
-    verbose:Optional[bool]=0) -> dict[str, str] | None:
+    includemetadata: Optional[bool]=True) -> dict[str, str] | None:
     """Fetch the data from the NOAA API.
 
     Args:
@@ -35,7 +35,6 @@ async def fecth_data(
         limit (int, optional): The limit parameter as specified in the NOAA Web Service API documentation.
         offset (int, optional): The offset parameter as specified in the NOAA Web Service API documentation.
         includemetadata (bool, optional): The metadata flag.
-        verbose (bool, optional): The verbosity flag.
     
     Returns:
         Optional[dict[str, str]]: A dictionary with 'metadata' and 'results' keys or None.
@@ -59,20 +58,12 @@ async def fecth_data(
     q_string = build_query_string(q_params)
 
     # Get all the available locations in the location category within the specified time range
-    data = await make_http_request("data", q_string)
-
-    if verbose and data and "metadata" in data.keys():
-        metadata = data["metadata"]
-        log_data = build_log_info(
-            context="Fetch data",
-            params=[("Items", f"{len(data['results'])}/{metadata['count']}"),]
-        )
-        custom_logger(log_data, LogLevel.INFO)
+    data = await send_get_request("data", q_string)
 
     return data
 
 
-async def fetch_data_from_stations_by_location(
+async def fetch_stations_by_location(
     datasetid: str,
     startdate: str,
     enddate: str,
@@ -137,11 +128,6 @@ async def fetch_data_from_stations_by_location(
     # Build the query string with the non-none parameters
     q_string = build_query_string(q_params)
 
-    if verbose:
-        # Log the starting of fetch operations
-        log_data = build_log_info(context="Fetch data", extra_params=[("Dataset", datasetid), ("Location", locationid)])
-        custom_logger(log_data, LogLevel.INFO)
-
     # Try to retrieve whitelist for the given location (e.g., 'BR')
     try:
         whitelist = retrieve_whitelist(whitelist_path, locationid)
@@ -168,37 +154,28 @@ async def fetch_data_from_stations_by_location(
             if stations_count == len(stationids) - 1:
                 is_complete = True
 
-            # Fetch and process results
-            result = await make_http_request('data', q_string, whitelist_path, is_complete)
+            result = await send_get_request('data', q_string, whitelist_path, is_complete)
+            
             data = None
+
             if result:
                 data = result['results']
                 complete_dataset.extend(data)
 
-            if verbose:
-                items = len(data) if data else 0
-                total_items = len(complete_dataset)
-                log_data = build_log_info(
-                    location=locationid,
-                    station=station_id,
-                    msg="Data fetched" if data else "Empty data",
-                    context="Fetch data",
-                    extra_params=[("Items", items), ("Total items", total_items)])
-                level = LogLevel.SUCCESS if data else LogLevel.DEBUG
-                custom_logger(log_data, level)
-
             stations_count += 1  # Increase stations counter
         except Exception:
-            log_data = build_log_info(
-                location=locationid,
-                station=station_id,
-                context="Fetch data",
-                extra_params=[("Period", f"{startdate} - {enddate}")])
-            custom_logger(log_data, LogLevel.EXCEPTION)
-
+            logger.exception(f"Failed to fetch data for station {station_id}")
+    if verbose:
+        log_content = build_log_info(
+            context="Data fetched" if complete_dataset else "Empty data",
+            params=[("Total items", len(complete_dataset)), ("Stations", len(stationids)), ("Whitelist", is_complete)])
+        if complete_dataset:
+            logger.success(log_content)
+        else:
+            logger.debug(log_content)
     return complete_dataset
 
-if __name__ == "__main__":
-    import asyncio
+# if __name__ == "__main__":
+#     import asyncio
 
     

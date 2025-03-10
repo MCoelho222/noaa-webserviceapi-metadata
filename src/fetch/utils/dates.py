@@ -29,5 +29,4 @@ def divide_date_range(start_date: str, end_date: str, step_months: int) -> list[
     return intervals
 
 if __name__ == "__main__":
-    # Test
     divide_date_range('2020-01-01', '2021-12-31', 3)
