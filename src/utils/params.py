@@ -7,7 +7,11 @@ def build_query_string(params: dict[str, str]) -> str:
     return "&".join([f"{key}={value}" for key, value in params.items() if value])
 
 
-def get_params_from_url(url: str, target_params: Optional[list[str]] = None, mode: Optional[str]="dict") -> dict[str, str] | list[tuple[str, str]]:
+def build_params_dict(params: list[tuple[str, str]]) -> dict[str, str]:
+    """Build a dictionary from a list of tuples."""
+    return {key: value for key, value in params}
+
+def extract_query_params(url: str, target_params: Optional[list[str]] = None, mode: Optional[str]="dict") -> dict[str, str] | list[tuple[str, str]]:
     """Extract specified query parameters from a URL.
 
     Args:
@@ -76,9 +80,9 @@ if __name__ == "__main__":
 
     url = base_url + "?" + build_query_string(params)
 
-    # Test get_params_from_url
-    print(get_params_from_url(url, ['stationid']))
-    print(get_params_from_url(url=url, mode="list"))
+    # Test extract_query_params
+    print(extract_query_params(url, ['stationid']))
+    print(extract_query_params(url=url, mode="list"))
     
     # Test calculate offsets
     print(build_query_string({'stationid': 'ABC123', 'itemid': 'FIPS:BR'}))
