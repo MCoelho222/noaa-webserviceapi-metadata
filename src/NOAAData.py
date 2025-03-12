@@ -148,8 +148,8 @@ if __name__ == "__main__":
     import asyncio
     import numpy as np
 
-    from noaa_locations import NOAALocations
-    from noaa_stations import NOAAStations
+    from src.NOAALocations import NOAALocations
+    from src.NOAAStations import NOAAStations
 
     async def main():
         WHITELIST_PATH = "whitelist.json"
