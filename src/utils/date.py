@@ -1,6 +1,7 @@
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
+
 def divide_date_range(start_date: str, end_date: str, step_months: int) -> list[tuple[str, str]]:
     """Split a date range into smaller ranges.
 

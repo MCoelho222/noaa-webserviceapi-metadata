@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def make_dataframe(noaa_json: dict) -> pd.DataFrame:
     # Convert to DataFrame
     df = pd.DataFrame(noaa_json)

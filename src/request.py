@@ -6,7 +6,7 @@ from typing import Optional
 from loguru import logger
 
 from utils.log import formatted_log_content
-from utils.params import dict_to_list
+from src.utils.data import dict_to_list
 from whitelist import Whitelist
 
 
