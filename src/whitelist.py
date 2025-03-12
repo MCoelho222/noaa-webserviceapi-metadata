@@ -4,8 +4,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from typing import Optional
 
-from utils.log import build_log_info
-from utils.params import build_query_string
+from utils.log import formatted_log_content
 
 load_dotenv()
 
@@ -28,7 +27,7 @@ class Whitelist():
         try:
             # Create the whitelist if it doesn't exist
             if not self.whitelist_path or not os.path.exists(self.whitelist_path):
-                logger.info(build_log_info(context="Whitelist started", params=[("whitelist_path", self.whitelist_path),]))
+                logger.info(formatted_log_content(context="Whitelist started", params=[("whitelist_path", self.whitelist_path),]))
                 return {
                     "metadata": {},
                 }  
@@ -36,19 +35,23 @@ class Whitelist():
                 # Load the whitelist JSON
                 with open(self.whitelist_path, "r") as f:
                     whitelist = json.load(f)
-                logger.info(build_log_info(context="Whitelist loaded", params=[("whitelist_path", self.whitelist_path),]))
+                logger.info(formatted_log_content(context="Whitelist loaded", params=[("whitelist_path", self.whitelist_path),]))
                 return whitelist
         except Exception:
             logger.exception(msg="Failed setting whitelist")
 
+
     def set_whitelist_key(self, key: str):
         self.whitelist_key = key
+
 
     def set_whitelist_value(self, value: str):
         self.whitelist_value = value
 
+
     def set_is_whitelist_complete(self, is_whitelist_complete: bool):
         self.is_whitelist_complete = is_whitelist_complete
+
 
     def is_whitelist_ready(self, params: list[tuple[str, str]]) -> bool:
         """Check if the whitelist is ready to be used.
@@ -82,6 +85,7 @@ class Whitelist():
 
         return True
 
+
     def add_to_whitelist(self, key: str, value: Optional[str]=None, is_whitelist_complete: bool=False) -> None:
         """Includes a target feature in the whitelist.
 
@@ -114,7 +118,7 @@ class Whitelist():
                 if value is None:  # Location is complete, update metadata
                     self.whitelist["metadata"][key] = "C"
                     self.update_whitelist()
-                    logger.success(build_log_info(context="Complete", params=log_params))
+                    logger.success(formatted_log_content(context="Complete", params=log_params))
 
                 # Check if the station ID is already included in the location's whitelist
                 elif value not in self.whitelist[key]:
@@ -123,26 +127,26 @@ class Whitelist():
 
                     if is_whitelist_complete:
                         self.whitelist["metadata"][key] = "C"
-                        logger.success(build_log_info(context="Complete", params=log_params))
+                        logger.success(formatted_log_content(context="Complete", params=log_params))
                     else:
-                        logger.info(build_log_info(context="Appended", params=log_params))
+                        logger.info(formatted_log_content(context="Appended", params=log_params))
                     self.update_whitelist()
 
                 elif value in self.whitelist[key]:  # Just log if it's already included
                     if is_whitelist_complete:
                         self.whitelist["metadata"][key] = "C"
-                        logger.warning(build_log_info(msg="Already in whitelist, location complete", params=log_params))
+                        logger.warning(formatted_log_content(msg="Already in whitelist, location complete", params=log_params))
                     else:
-                        logger.warning(build_log_info(msg="Already in whitelist", params=log_params))
+                        logger.warning(formatted_log_content(msg="Already in whitelist", params=log_params))
 
             else:  # Create key if it doesn't exist
                 self.whitelist["metadata"][key] = "I" if not is_whitelist_complete else "C"
                 self.whitelist[key] = [value,]
 
-                logger.info(build_log_info(context="Appended", params=log_params))
+                logger.info(formatted_log_content(context="Appended", params=log_params))
                 self.update_whitelist()
         except Exception:
-            logger.exception(build_log_info(context="Failed adding to whitelist", params=log_params))
+            logger.exception(formatted_log_content(context="Failed adding to whitelist", params=log_params))
 
 
     def retrieve_whitelist(self, target_key: Optional[str] = None) -> dict[str, str]:
@@ -192,7 +196,6 @@ if __name__ == "__main__":
         "enddate": "2024-12-31",
         "limit": 1000
     }
-    q_string = build_query_string(params)
 
     # async def main():
     #     whitelist = WhitelistFetchNOAA(whitelist_path="whitelist_test.json")

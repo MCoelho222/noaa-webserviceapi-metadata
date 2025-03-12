@@ -1,7 +1,6 @@
 from typing import Optional
 
 from request import Request
-from utils.params import build_query_string
 
 
 class NOAALocations(Request):
@@ -44,7 +43,7 @@ class NOAALocations(Request):
             "limit": self.limit,
             "offset": self.offset
         }
-
+        self.q_string = self.build_query_string_from_dict(self.params_dict)
         self.data = None
 
     async def fetch(self,) -> dict[str, str]:
@@ -54,7 +53,7 @@ class NOAALocations(Request):
             dict: The locations fetched from the NOAA API.
         """
         # Get all the available locations
-        data = await self.get_request("locations", build_query_string(self.params_dict))
+        data = await self.get("locations", self.q_string)
 
         self.data = data
         return data

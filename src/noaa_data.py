@@ -3,8 +3,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from request import Request
-from utils.params import build_query_string
-from utils.log import build_log_info
+from utils.log import formatted_log_content
 
 
 class NOAAData(Request):
@@ -55,7 +54,7 @@ class NOAAData(Request):
             "offset": self.offset,
             "includemetadata": self.includemetadata,
         }
-        self.q_string = build_query_string(self.params_dict)
+        self.q_string = self.build_query_string_from_dict(self.params_dict)
         self.data = None
 
 
@@ -66,7 +65,7 @@ class NOAAData(Request):
             Optional[dict[str, str]]: A dictionary with 'metadata' and 'results' keys or None.
         """
         # Get all the available locations in the location category within the specified time range
-        data = await self.get_request("data", build_query_string(self.params_dict))
+        data = await self.get("data", self.q_string)
 
         return data
 
@@ -121,7 +120,7 @@ class NOAAData(Request):
                 if stations_count == len(stationsids) - 1:
                     is_complete = self.set_is_whitelist_complete(True)
 
-                result = await self.get_request('data', q_string)
+                result = await self.get('data', q_string)
                 
                 data = None
 
@@ -134,7 +133,7 @@ class NOAAData(Request):
                 logger.exception(f"Failed to fetch data for station {station_id}")
 
         if verbose:
-            log_content = build_log_info(
+            log_content = formatted_log_content(
                 context="Data fetched" if complete_dataset else "Empty data",
                 params=[("Total items", len(complete_dataset)), ("Stations", len(stationsids)), ("Whitelist", is_complete)])
             if complete_dataset:
@@ -151,7 +150,6 @@ if __name__ == "__main__":
 
     from noaa_locations import NOAALocations
     from noaa_stations import NOAAStations
-    from utils.params import calculate_offsets
 
     async def main():
         WHITELIST_PATH = "whitelist.json"
@@ -212,9 +210,9 @@ if __name__ == "__main__":
 
                 # If there are more than 1000, calculate the offsets for fetching stations in smaller steps
                 if count > 1000:
-                    offsets = calculate_offsets(count)
+                    offsets = noaa_stations.calculate_offsets(count)
 
-                    log_content = build_log_info(
+                    log_content = formatted_log_content(
                         context="Offsets calculated",
                         params=[
                             ("Stations", count),
@@ -241,7 +239,7 @@ if __name__ == "__main__":
                 data = await noaa_data.fetch_stations_by_location(locationid=locationid, stationsids=unique_stations_ids)
 
                 if data:
-                    log_content = build_log_info(
+                    log_content = formatted_log_content(
                         params=[
                             ("Country", ids_names_dict[locationid]),
                                 ("Stations count", len(unique_stations_ids)),
