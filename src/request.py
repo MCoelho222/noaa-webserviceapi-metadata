@@ -26,6 +26,7 @@ class Request(Whitelist):
         self.params_dict = None
         self.has_data = False
 
+
     async def get(self, endpoint: str, q_string: Optional[str]=None, max_retries: Optional[int]=5) -> Optional[dict]:
         """Asynchronous function for making HTTP GET requests to the NOAA Web Services API.
 
@@ -43,7 +44,6 @@ class Request(Whitelist):
         Returns:
             dict or None: The parsed content of the response object, or None if the request fails.
         """
-        # Retrieve token from .env
         token = os.getenv("NOAA_GMAIL_TOKEN")
         if not token:
             logger.error("API token is missing. Set the NOAA_API_TOKEN environment variable.")
@@ -95,7 +95,7 @@ class Request(Whitelist):
                                     log_content = formatted_log_content(params=[("Status", 200), ("Items", f"{results}/{available}"),])
                                     logger.success(log_content)
 
-                                    if endpoint == "data":
+                                    if endpoint == "data" and not self.is_whitelist_complete:
                                         self._include_in_whitelist()
 
                                 return data
@@ -186,18 +186,11 @@ class Request(Whitelist):
     def _include_in_whitelist(self,) -> None:
         # If the response JSON is non-empty, include the whitelist_value in the whitelist_key's list
         if self.whitelist and self.is_whitelist_ready(self.params_list):
-            # Extract the key and value from the query parameters
-            key = self.params_dict[self.whitelist_key]
-            # Or if is empty but the screening is complete,
-            # we have to call the function with value=None to update the whitelist's metadata
-            value = None if not self.has_data and self.is_whitelist_complete else self.params_dict[self.whitelist_value]
 
-            if key and value:
-                self.add_to_whitelist(
-                    key=key,
-                    value=value,
-                    is_whitelist_complete=self.is_whitelist_complete
-                    )
+            self.add_to_whitelist(
+                key=self.params_dict[self.whitelist_key],
+                value=self.params_dict[self.whitelist_value],
+            )
 
 
     @staticmethod
