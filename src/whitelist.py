@@ -15,7 +15,7 @@ class Whitelist():
         self.whitelist_key = whitelist_key
         self.whitelist_value = whitelist_value
         self.is_whitelist_complete = False
-
+        self.is_whitelist_last_item = False
         self.whitelist = self.set_whitelist()
 
     def set_whitelist(self) -> dict[str, str]:
@@ -54,6 +54,10 @@ class Whitelist():
         self.is_whitelist_complete = is_whitelist_complete
 
 
+    def set_is_whitelist_last_item(self, is_whitelist_last_item: bool):
+        self.is_whitelist_last_item = is_whitelist_last_item
+
+
     def is_whitelist_ready(self, params: list[tuple[str, str]]) -> bool:
         """Check if the whitelist is ready to be used.
 
@@ -87,7 +91,7 @@ class Whitelist():
         return True
 
 
-    def add_to_whitelist(self, key: str, value: Optional[str]=None, is_whitelist_complete: bool=False) -> None:
+    def add_to_whitelist(self, key: str, value: str) -> None:
         """Includes a target feature in the whitelist.
 
         The whitelist has the following example structure: 
@@ -112,37 +116,29 @@ class Whitelist():
             is_whitelist_complete (bool, optional): If True, the location is considered complete.
         """
         try:
-            log_params = [("Key", key), ("Value", value), ("is_whitelist_complete", is_whitelist_complete)]
+            log_params = [("Key", key), ("Value", value)]
 
             # Check if the location exists in the whitelist
             if key in self.whitelist.keys():
-                if value is None:  # Location is complete, update metadata
-                    self.whitelist["metadata"][key] = "C"
-                    logger.success(formatted_log_content(context="Complete", params=log_params))
 
                 # Check if the station ID is already included in the location's whitelist
-                elif value not in self.whitelist[key]:
+                if value not in self.whitelist[key]:
                     # Include in the whitelist
                     self.whitelist[key].append(value)
 
-                    if is_whitelist_complete:
-                        self.whitelist["metadata"][key] = "C"
-                        logger.success(formatted_log_content(context="Complete", params=log_params))
-                    else:
-                        logger.info(formatted_log_content(context="Appended", params=log_params))
-
+                    logger.info(formatted_log_content(context="Appended", params=log_params))
                 elif value in self.whitelist[key]:  # Just log if it's already included
-                    if is_whitelist_complete:
-                        self.whitelist["metadata"][key] = "C"
-                        logger.warning(formatted_log_content(msg="Already in whitelist, location complete", params=log_params))
-                    else:
-                        logger.warning(formatted_log_content(msg="Already in whitelist", params=log_params))
+                    logger.warning(formatted_log_content(msg="Already in whitelist", params=log_params))
 
+                if self.is_whitelist_last_item:  # Set the whitelist as complete and update metadata
+                    self.whitelist["metadata"][key] = "C"
+                    self.set_is_whitelist_complete(True)
+                    logger.success(formatted_log_content(context="Whitelist Complete", params=log_params))
             else:  # Create key if it doesn't exist
-                self.whitelist["metadata"][key] = "I" if not is_whitelist_complete else "C"
+                self.whitelist["metadata"][key] = "I"
                 self.whitelist[key] = [value,]
 
-                logger.info(formatted_log_content(context="Appended", params=log_params))
+                logger.info(formatted_log_content(context="Added to whitelist", params=log_params))
         except Exception:
             logger.exception(formatted_log_content(context="Failed adding to whitelist", params=log_params))
 

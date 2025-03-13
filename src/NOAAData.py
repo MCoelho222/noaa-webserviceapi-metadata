@@ -57,10 +57,12 @@ class NOAAData(Request, NOAALocations, NOAAStations):
             "includemetadata": includemetadata,
         }
         
-        return await self.get_with_offsets("data", params_dict, offsets)
+        data = await self.get_with_offsets("data", params_dict, offsets)
+        self.data = data
+        return data
 
 
-    async def fetch_stations_by_location(self, locationid: str, stationsids: Optional[list[str]]=None, verbose: Optional[bool]=0) -> list[dict[str, Any]]:
+    async def fetch_location_data_by_stations(self, locationid: str, verbose: Optional[bool]=0) -> list[dict[str, Any]]:
         """Fetches station data for a specific country within a date range.
 
         This function retrieves station data from an external source for a given dataset,
@@ -93,41 +95,38 @@ class NOAAData(Request, NOAALocations, NOAAStations):
             "locationid": locationid
         }
 
-        if not stationsids:
-            # Try to retrieve whitelist for the given location (e.g., 'BR')
-            whitelist = self.retrieve_whitelist(locationid)
+        stationsids = None
 
-            is_complete = False
-            # If the location's whitelist is complete,
-            if whitelist:
-                is_complete = whitelist["metadata"] == "C"
+        # Try to retrieve whitelist for the given location (e.g., 'BR')
+        loc_whitelist = self.retrieve_whitelist(locationid)
 
-            if is_complete:
-                # redefine 'stationids' to include only the ones in the whitelist
-                stationsids = [station_id for station_id in stationsids if station_id in whitelist[locationid]]
-            else:
-                offsets = await self.fetch_for_offsets("stations", params)
-                stations = await self.fetch_stations(
-                    datasetid=self.datasetid,
-                    locationid=locationid,
-                    startdate=self.startdate,
-                    enddate=self.enddate,
-                    offsets=offsets
-                )
+        # If the location's whitelist is complete,
+        if loc_whitelist and loc_whitelist["metadata"] == "C":
+            stationsids = loc_whitelist[locationid]
+            self.set_is_whitelist_complete(True)
+            # redefine'stationids' to include only the ones in the whitelist
+        else:
+            self.set_is_whitelist_complete(False)
+            offsets = await self.fetch_for_offsets("stations", params)
+            stations = await self.fetch_stations(
+                datasetid=self.datasetid,
+                locationid=locationid,
+                startdate=self.startdate,
+                enddate=self.enddate,
+                offsets=offsets
+            )
 
-                stationsids = [station["id"] for station in stations["results"]]
+            stationsids = [station["id"] for station in stations["results"]]
 
         complete_dataset = []  # Store all the data
 
         # Stations counter to track when all station have been sreened
-        stations_count = 0
-
-        self.set_is_whitelist_complete(False)
+        stations_count = 1
         for station_id in stationsids:
             try:
                 # Add station id to query string
-                if stations_count == len(stationsids) - 1:
-                    is_complete = self.set_is_whitelist_complete(True)
+                if stations_count == len(stationsids):
+                    self.set_is_whitelist_last_item(True)
 
                 result = await self.fetch_data(stationid=station_id, locationid=locationid)
                 
@@ -142,7 +141,7 @@ class NOAAData(Request, NOAALocations, NOAAStations):
         if verbose:
             log_content = formatted_log_content(
                 context="Data fetched" if complete_dataset else "Empty data",
-                params=[("Total items", len(complete_dataset)), ("Stations", len(stationsids)), ("Whitelist", is_complete)])
+                params=[("Total items", len(complete_dataset)), ("Stations", len(stationsids))])
             if complete_dataset:
                 logger.success(log_content)
             else:
@@ -199,7 +198,7 @@ if __name__ == "__main__":
 
         for locationid in locations_list[:batch_offset]:
 
-            data = await noaa_data.fetch_stations_by_location(locationid=locationid)
+            data = await noaa_data.fetch_location_data_by_stations(locationid=locationid)
 
             if data:
                 logger.success(formatted_log_content(params=[("Country", ids_names_dict[locationid]), ("Location rows", len(data))]))
