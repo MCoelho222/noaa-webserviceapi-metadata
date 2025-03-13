@@ -24,21 +24,22 @@ class Whitelist():
         Returns:
             dict: The whitelist JSON file.
         """
-        try:
-            # Create the whitelist if it doesn't exist
-            if not self.whitelist_path or not os.path.exists(self.whitelist_path):
-                logger.info(formatted_log_content(context="Whitelist started", params=[("whitelist_path", self.whitelist_path),]))
-                return {
-                    "metadata": {},
-                }  
-            else:
-                # Load the whitelist JSON
-                with open(self.whitelist_path, "r") as f:
-                    whitelist = json.load(f)
-                logger.info(formatted_log_content(context="Whitelist loaded", params=[("whitelist_path", self.whitelist_path),]))
-                return whitelist
-        except Exception:
-            logger.exception(msg="Failed setting whitelist")
+        if self.whitelist_path:
+            try:
+                # Create the whitelist if it doesn't exist
+                if not os.path.exists(self.whitelist_path):
+                    logger.info(formatted_log_content(context="Whitelist created", params=[("whitelist_path", self.whitelist_path),]))
+                    return {"metadata": {},}
+                else:
+                    # Load the whitelist JSON
+                    with open(self.whitelist_path, "r") as f:
+                        whitelist = json.load(f)
+                    logger.info(formatted_log_content(context="Whitelist loaded", params=[("whitelist_path", self.whitelist_path),]))
+                    return whitelist
+            except Exception:
+                logger.exception(msg="Failed setting whitelist")
+        else:
+            return None
 
 
     def set_whitelist_key(self, key: str):
@@ -117,7 +118,6 @@ class Whitelist():
             if key in self.whitelist.keys():
                 if value is None:  # Location is complete, update metadata
                     self.whitelist["metadata"][key] = "C"
-                    self.update_whitelist()
                     logger.success(formatted_log_content(context="Complete", params=log_params))
 
                 # Check if the station ID is already included in the location's whitelist
@@ -130,7 +130,6 @@ class Whitelist():
                         logger.success(formatted_log_content(context="Complete", params=log_params))
                     else:
                         logger.info(formatted_log_content(context="Appended", params=log_params))
-                    self.update_whitelist()
 
                 elif value in self.whitelist[key]:  # Just log if it's already included
                     if is_whitelist_complete:
@@ -144,7 +143,6 @@ class Whitelist():
                 self.whitelist[key] = [value,]
 
                 logger.info(formatted_log_content(context="Appended", params=log_params))
-                self.update_whitelist()
         except Exception:
             logger.exception(formatted_log_content(context="Failed adding to whitelist", params=log_params))
 
@@ -177,12 +175,18 @@ class Whitelist():
             return {}
 
 
-    def update_whitelist(self):
+    def save_whitelist(self):
         """Update the whitelist file with the updated JSON."""
-        # Update the whitelist file with the updated JSON
-        with open(self.whitelist_path, "w") as f:
-            json.dump(self.whitelist, f, indent=4)
-        logger.info("Whitelist JSON updated")
+        if self.whitelist:
+            try:
+                # Update the whitelist file with the updated JSON
+                with open(self.whitelist_path, "w") as f:
+                    json.dump(self.whitelist, f, indent=4)
+                logger.success(f"Whitelist saved to: {self.whitelist_path}")
+            except FileNotFoundError:
+                logger.error(f"File not found: {self.whitelist_path}")
+        else:
+            logger.debug("No whitelist to update")
 
 
 if __name__ == "__main__":

@@ -2,11 +2,11 @@ import aiohttp
 import asyncio
 import os
 import numpy as np
-from typing import Optional
+from typing import Any, Optional
 from loguru import logger
 
 from utils.log import formatted_log_content
-from src.utils.data import dict_to_list
+from utils.data import dict_to_list
 from whitelist import Whitelist
 
 
@@ -22,8 +22,9 @@ class Request(Whitelist):
     """
     def __init__(self, whitelist_path: Optional[str]=None, whitelist_key: Optional[str]=None, whitelist_value: Optional[str]=None):
         super().__init__(whitelist_path, whitelist_key, whitelist_value)
-        self.params = {}
-        self.response = None
+        self.params_list = None
+        self.params_dict = None
+        self.has_data = False
 
     async def get(self, endpoint: str, q_string: Optional[str]=None, max_retries: Optional[int]=5) -> Optional[dict]:
         """Asynchronous function for making HTTP GET requests to the NOAA Web Services API.
@@ -48,10 +49,10 @@ class Request(Whitelist):
             logger.error("API token is missing. Set the NOAA_API_TOKEN environment variable.")
             return None
 
-        self.params = self.url_params_to_dict(q_string)
+        self.params_dict = self.url_params_to_dict(q_string)
 
-        params_list = dict_to_list(self.params)
-        params_list.extend([("whitelist_key", self.whitelist_key), ("whitelist_value", self.whitelist_value)])
+        self.params_list = dict_to_list(self.params_dict)
+        self.params_list.extend([("whitelist_key", self.whitelist_key), ("whitelist_value", self.whitelist_value)])
 
         # Base URL for the NOAA Web Service API
         baseurl = os.getenv("NOAA_API_URL")
@@ -63,9 +64,10 @@ class Request(Whitelist):
         async with semaphore:
             await asyncio.sleep(0.2)  # Ensures ~5 requests per second
             async with aiohttp.ClientSession() as session:
-                context = "Started..."
+                context = "Request sent..."
                 for attempt in range(max_retries):  # Maximum of 5 retries
-                    log_content = formatted_log_content(context=context, params=params_list)
+                    log_content = formatted_log_content(context=context, params=self.params_list)
+                    self.has_data = False
                     try:
                         async with session.get(url, headers={"token": token}) as res:
                             logger.info(log_content)
@@ -87,29 +89,15 @@ class Request(Whitelist):
                                 if not data:
                                     logger.debug("Empty data")
                                 else:
+                                    self.has_data = True
                                     results = len(data["results"]) if "results" in data else 0
                                     available = data["metadata"]["resultset"]["count"] if "metadata" in data else 0
-                                    log_content = formatted_log_content(context="200", params=[("Items", f"{results}/{available}"),])
+                                    log_content = formatted_log_content(params=[("Status", 200), ("Items", f"{results}/{available}"),])
                                     logger.success(log_content)
 
-                                # If the response JSON is non-empty, include the whitelist_value in the whitelist_key's list
-                                if self.is_whitelist_ready(params_list):
-                                    # Extract the key and value from the query parameters
-                                    params_dict = self.url_params_to_dict(url, [self.whitelist_key, self.whitelist_value])
-                                    key = params_dict[self.whitelist_key]
+                                    if endpoint == "data":
+                                        self._include_in_whitelist()
 
-                                    # Or if is empty but the screening is complete,
-                                    # we have to call the function with value=None to update the whitelist's metadata
-                                    value = None if not data and self.is_whitelist_complete else params_dict[self.whitelist_value]
-
-                                    if key and value:
-                                        self.add_to_whitelist(
-                                            key=key,
-                                            value=value,
-                                            is_whitelist_complete=self.is_whitelist_complete
-                                            )
-
-                                self.response = data
                                 return data
 
                             except aiohttp.ContentTypeError:
@@ -119,9 +107,46 @@ class Request(Whitelist):
                     except aiohttp.ClientError:
                         logger.exception("Request failed")
                         return None
-    
 
-    def process_response(self, option: str) -> np.ndarray | dict[str, str] | list[str]:
+
+    async def get_with_offsets(self, endpoint: str, params: dict[str, str], offsets: list[int]):
+        q_string = self.build_query_string_from_dict(params)
+
+        if len(offsets) == 1:
+            data = await self.get(endpoint, q_string)
+        else:
+            data = {
+                "metadata": {},
+                "results": []
+            }
+            for offset in offsets:
+                q_string_offset = q_string + f"&offset={offset}"
+                res_data = await self.get(endpoint, q_string_offset)
+
+                if "metadata" in data and "metadata" not in res_data.keys():
+                    data["metadata"] = res_data["metadata"]
+                if data and "results" in res_data.keys():
+                    data["results"].extend(res_data["results"])
+
+        return data
+
+    
+    async def fetch_for_offsets(self, endpoint: str, params_dict: dict[str, Any]) -> list[int]:
+        params_dict["limit"] = 1
+        q_string = self.build_query_string_from_dict(params_dict)
+        result = await self.get(endpoint, q_string)
+
+        if result and "metadata" in result.keys():
+            count = result["metadata"]["resultset"]["count"]
+
+            return self.calculate_offsets(int(count))
+        
+        params_list = dict_to_list(params_dict)
+        params_list.extend(("Endpoint", endpoint))
+        logger.debug(formatted_log_content(context="Empty data or 'metadata' not in response", params=params_list))
+
+
+    def process_response_json(self, res_json: dict[str, str], option: str) -> np.ndarray | dict[str, str] | list[str] | None:
         """Process the response fetched from the NOAA API."
 
         Args:
@@ -129,27 +154,27 @@ class Request(Whitelist):
             option (str): The option to retrieve from the response. 
                 Options: 'metadata', 'results', 'ids', 'names', 'ids_names_dict', 'names_ids_dict'.
         """
-        if self.response:
+        if self.has_data:
             try:
                 if option == "metadata":
-                    return self.response["metadata"]
+                    return res_json["metadata"]
                 elif option == 'results':
-                    return self.response["results"]
+                    return res_json["results"]
                 elif option == 'ids':
                     # Return ordered list of unique location IDs
-                    return np.unique([location["id"] for location in self.response["results"]])
+                    return np.unique([item["id"] for item in res_json["results"]])
                 elif option == 'names':
-                    # Return ordered list of unique location names
-                    return np.unique([location["name"] for location in self.response["results"]])
+                    # Return ordered list of unique item names
+                    return np.unique([item["name"] for item in res_json["results"]])
                 elif option == "ids_names_dict":
-                    # Return dictionary with location IDs as keys and location names as values
-                    return {location["id"]: location["name"] for location in self.response["results"]}
+                    # Return dictionary with item IDs as keys and item names as values
+                    return {item["id"]: item["name"] for item in res_json["results"]}
                 elif option == "names_ids_dict":
-                    # Return dictionary with location names as keys and location IDs as values
-                    return {location["name"]: location["id"] for location in self.response["results"]}
+                    # Return dictionary with item names as keys and item IDs as values
+                    return {item["name"]: item["id"] for item in res_json["results"]}
                 else:
                     logger.error("Failed to process response, Invalid option")
-                    return self.response
+                    return res_json
             except KeyError:
                 logger.exception("Failed to process response, KeyError")
         
@@ -158,9 +183,25 @@ class Request(Whitelist):
             return None
 
 
-    def build_query_string_from_dict(self, params_dict: Optional[dict[str, str]]) -> str:
-        params_dict = params_dict if params_dict else self.params
+    def _include_in_whitelist(self,) -> None:
+        # If the response JSON is non-empty, include the whitelist_value in the whitelist_key's list
+        if self.whitelist and self.is_whitelist_ready(self.params_list):
+            # Extract the key and value from the query parameters
+            key = self.params_dict[self.whitelist_key]
+            # Or if is empty but the screening is complete,
+            # we have to call the function with value=None to update the whitelist's metadata
+            value = None if not self.has_data and self.is_whitelist_complete else self.params_dict[self.whitelist_value]
 
+            if key and value:
+                self.add_to_whitelist(
+                    key=key,
+                    value=value,
+                    is_whitelist_complete=self.is_whitelist_complete
+                    )
+
+
+    @staticmethod
+    def build_query_string_from_dict(params_dict: Optional[dict[str, str]]) -> str:
         return "&".join([f"{key}={value}" for key, value in params_dict.items() if value])
     
 

@@ -3,9 +3,13 @@ from typing import Optional
 from request import Request
 
 
-class NOAALocations(Request):
+class NOAALocations():
     """Class for fetching the available locations from the NOAA API."""
-    def __init__(
+    def __init__(self) -> None:
+        self.data = None
+
+
+    async def fetch_locations(
         self,
         datasetid: Optional[str]=None,
         locationcategoryid: Optional[str]=None,
@@ -15,47 +19,24 @@ class NOAALocations(Request):
         sortfield: Optional[str]=None,
         sortorder: Optional[str]=None,
         limit: Optional[str]=1000,
-        offset: Optional[str]=0,
-        whitelist_path: Optional[str]=None,
-        whitelist_key: Optional[str]=None,
-        whitelist_value: Optional[str]=None) -> None:
-
-        super().__init__(whitelist_path, whitelist_key, whitelist_value)
-
-        self.datasetid = datasetid
-        self.locationcategoryid = locationcategoryid
-        self.datacategoryid = datacategoryid
-        self.startdate = startdate
-        self.enddate = enddate
-        self.sortfield = sortfield
-        self.sortorder = sortorder
-        self.limit = limit
-        self.offset = offset
-
-        self.params_dict = {
-            "datasetid": self.datasetid,
-            "locationcategoryid": self.locationcategoryid,
-            "datacategoryid": self.datacategoryid,
-            "startdate": self.startdate,
-            "enddate": self.enddate,
-            "sortfield": self.sortfield,
-            "sortorder": self.sortorder,
-            "limit": self.limit,
-            "offset": self.offset
-        }
-        self.q_string = self.build_query_string_from_dict(self.params_dict)
-        self.data = None
-
-    async def fetch(self,) -> dict[str, str]:
+        offsets: Optional[list[int]]=[0]) -> dict[str, str]:
         """Fetch the locations from the NOAA API.
 
         Returns:
             dict: The locations fetched from the NOAA API.
         """
-        # Get all the available locations
-        data = await self.get("locations", self.q_string)
-
-        self.data = data
+        params_dict = {
+            "datasetid": datasetid,
+            "locationcategoryid": locationcategoryid,
+            "datacategoryid": datacategoryid,
+            "startdate": startdate,
+            "enddate": enddate,
+            "sortfield": sortfield,
+            "sortorder": sortorder,
+            "limit": limit,
+        }
+        req = Request()
+        data = await req.get_with_offsets("locations", params_dict, offsets)
         return data
 
 
@@ -63,8 +44,8 @@ if __name__ == "__main__":
     import asyncio
 
     async def main():
-        noaa_locations = NOAALocations(datasetid='GSOM', locationcategoryid='CITY')
-        locations = await noaa_locations.fetch()
+        noaa_locations = NOAALocations()
+        locations = await noaa_locations.fetch_locations(datasetid='GSOM', locationcategoryid='CITY')
         if locations:
             print(locations["metadata"])
             print(locations["results"][:5])
