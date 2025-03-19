@@ -2,7 +2,7 @@ from loguru import logger
 from typing import Optional
 
 
-def formatted_log_content(context: Optional[str] = None, msg: Optional[str] = None, params: Optional[list[tuple[str, str]]] = None) -> dict[str, str]:
+def format_log_content(context: Optional[str] = None, msg: Optional[str] = None, params: Optional[list[tuple[str, str]]] = None) -> dict[str, str]:
     """Format the log content.
 
     Args:
@@ -32,8 +32,8 @@ def formatted_log_content(context: Optional[str] = None, msg: Optional[str] = No
     return content
 
 if __name__ == "__main__":
-    log_data = formatted_log_content(context="Logger", params=[("Location", "BR"), ("Station", "ABC123"), ("Total", "1000"),])
+    log_data = format_log_content(context="Logger", params=[("Location", "BR"), ("Station", "ABC123"), ("Total", "1000"),])
     logger.success(log_data)
 
-    log_data = formatted_log_content(context="Logger", msg="This is a test", params=[("Location", "BR"), ("Station", "ABC123"), ("Total", "1000"),])
+    log_data = format_log_content(context="Logger", msg="This is a test", params=[("Location", "BR"), ("Station", "ABC123"), ("Total", "1000"),])
     logger.debug(log_data)

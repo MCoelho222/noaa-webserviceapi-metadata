@@ -5,8 +5,8 @@ import numpy as np
 from typing import Any, Optional
 from loguru import logger
 
-from utils.log import formatted_log_content
-from utils.data import dict_to_list
+from utils.log import format_log_content
+from utils.data import list_of_tuples_from_dict
 from whitelist import Whitelist
 
 
@@ -20,14 +20,15 @@ class Request(Whitelist):
         whitelist_value (str, optional): The value to be used in the whitelist.
         is_whitelist_complete (bool): If True, the location is considered complete.
     """
-    def __init__(self, whitelist_path: Optional[str]=None, whitelist_key: Optional[str]=None, whitelist_value: Optional[str]=None):
+    def __init__(self, endpoint: str, whitelist_path: Optional[str]=None, whitelist_key: Optional[str]=None, whitelist_value: Optional[str]=None):
         super().__init__(whitelist_path, whitelist_key, whitelist_value)
+        self.endpoint = endpoint
         self.params_list = None
         self.params_dict = None
         self.has_data = False
 
 
-    async def get(self, endpoint: str, q_string: Optional[str]=None, max_retries: Optional[int]=5) -> Optional[dict]:
+    async def get(self, q_string: Optional[str]=None, max_retries: Optional[int]=5) -> Optional[dict]:
         """Asynchronous function for making HTTP GET requests to the NOAA Web Services API.
 
         It ensures a maximum of 'max_retries' concurrent requests (NOAA API's limit).
@@ -49,33 +50,26 @@ class Request(Whitelist):
             logger.error("API token is missing. Set the NOAA_API_TOKEN environment variable.")
             return None
 
-        self.params_dict = self.url_params_to_dict(q_string)
-
-        self.params_list = dict_to_list(self.params_dict)
-        self.params_list.extend([("whitelist_key", self.whitelist_key), ("whitelist_value", self.whitelist_value)])
+        self.params_dict = self.dict_from_url_params(q_string)
+        self.params_list = list_of_tuples_from_dict(self.params_dict)
 
         # Base URL for the NOAA Web Service API
         baseurl = os.getenv("NOAA_API_URL")
 
         # Complete URL with endpoint and query parameters, if query parameters are passed
-        url = f"{baseurl}{endpoint}?{q_string}" if q_string else f"{baseurl}{endpoint}"
+        url = f"{baseurl}{self.endpoint}?{q_string}" if q_string else f"{baseurl}{self.endpoint}"
 
         semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
         async with semaphore:
             await asyncio.sleep(0.2)  # Ensures ~5 requests per second
             async with aiohttp.ClientSession() as session:
-                context = "Request sent..."
                 for attempt in range(max_retries):  # Maximum of 5 retries
-                    log_content = formatted_log_content(context=context, params=self.params_list)
                     self.has_data = False
                     try:
                         async with session.get(url, headers={"token": token}) as res:
-                            logger.info(log_content)
-
                             if res.status == 503:
                                 wait_time = 2 ** attempt  # Exponential backoff
-                                logger.debug(f"503 Service Unavailable. Retrying in {wait_time} seconds...")
-                                context = f"Retrying... {attempt + 1}/{max_retries}"
+                                logger.debug(f"503 Service Unavailable. Retrying {attempt + 1}/{max_retries} in {wait_time} seconds...")
                                 await asyncio.sleep(wait_time)
                                 continue  # Retry the request
 
@@ -92,10 +86,9 @@ class Request(Whitelist):
                                     self.has_data = True
                                     results = len(data["results"]) if "results" in data else 0
                                     available = data["metadata"]["resultset"]["count"] if "metadata" in data else 0
-                                    log_content = formatted_log_content(params=[("Status", 200), ("Items", f"{results}/{available}"),])
-                                    logger.success(log_content)
+                                    logger.success(format_log_content(params=[("Status", 200), ("Items", f"{results}/{available}")]))
 
-                                    if endpoint == "data" and not self.is_whitelist_complete:
+                                    if self.endpoint == "data" and not self.is_whitelist_complete:
                                         self._include_in_whitelist()
 
                                 return data
@@ -109,41 +102,44 @@ class Request(Whitelist):
                         return None
 
 
-    async def get_with_offsets(self, endpoint: str, params: dict[str, str], offsets: list[int]):
+    async def get_with_offsets(self, params: dict[str, str], offsets: list[int]):
         q_string = self.build_query_string_from_dict(params)
 
         if len(offsets) == 1:
-            data = await self.get(endpoint, q_string)
+            data = await self.get(q_string)
         else:
             data = {
                 "metadata": {},
                 "results": []
             }
+            count = 1
+            total_count = len(offsets)
             for offset in offsets:
+                logger.info(format_log_content(context=f"Fetching offset {count}/{total_count}...", params=[("Endpoint", self.endpoint)]))
                 q_string_offset = q_string + f"&offset={offset}"
-                res_data = await self.get(endpoint, q_string_offset)
+                res_data = await self.get(self.endpoint, q_string_offset)
 
                 if "metadata" in data and "metadata" not in res_data.keys():
                     data["metadata"] = res_data["metadata"]
                 if data and "results" in res_data.keys():
                     data["results"].extend(res_data["results"])
 
+                count += 1
         return data
 
     
-    async def fetch_for_offsets(self, endpoint: str, params_dict: dict[str, Any]) -> list[int]:
+    async def fetch_for_offsets(self, params_dict: dict[str, Any]) -> list[int]:
+        logger.info("Fetching for offsets...")
         params_dict["limit"] = 1
         q_string = self.build_query_string_from_dict(params_dict)
-        result = await self.get(endpoint, q_string)
+        result = await self.get(q_string)
 
         if result and "metadata" in result.keys():
             count = result["metadata"]["resultset"]["count"]
 
             return self.calculate_offsets(int(count))
         
-        params_list = dict_to_list(params_dict)
-        params_list.extend(("Endpoint", endpoint))
-        logger.debug(formatted_log_content(context="Empty data or 'metadata' not in response", params=params_list))
+        logger.debug("Empty data or 'metadata' not in response")
 
 
     def process_response_json(self, res_json: dict[str, str], option: str) -> np.ndarray | dict[str, str] | list[str] | None:
@@ -199,7 +195,7 @@ class Request(Whitelist):
     
 
     @staticmethod
-    def url_params_to_dict(url: str, params: Optional[list[str]] = None) -> dict[str, str] | list[tuple[str, str]]:
+    def dict_from_url_params(url: str, params: Optional[list[str]] = None) -> dict[str, str] | list[tuple[str, str]]:
         """Extract specified query parameters from a URL.
 
         Args:
@@ -253,6 +249,15 @@ class Request(Whitelist):
             offsets = np.arange(0, end, 1000) + 1
             offsets[0] = 0
 
+            if len(offsets) > 3:
+                log_content = f"Using offsets: [{offsets[0]}, {offsets[1]}, {offsets[2]}, ...,{offsets[-1]}]"
+            if len(offsets) == 3:
+                log_content = f"Using offsets: [{offsets[0]}, {offsets[1]}, ...,{offsets[-1]}]"
+            if len(offsets) == 2:
+                log_content = f"Using offsets: [{offsets[0]}, ...,{offsets[-1]}]"
+            
+            logger.info(log_content)
             return offsets
 
+        logger.info("No offsets needed")
         return [0]

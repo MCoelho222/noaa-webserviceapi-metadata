@@ -1,12 +1,12 @@
 from typing import Any
 
 
-def list_to_dict(params: list[tuple[str, str]]) -> dict[str, str]:
+def dict_from_list_of_tuples(params: list[tuple[str, str]]) -> dict[str, str]:
     """Build a dictionary from a list of tuples."""
     return {key: value for key, value in params}
 
 
-def dict_to_list(obj: dict[str, Any]) -> list[tuple[str, str]]:
+def list_of_tuples_from_dict(obj: dict[str, Any], exclude_none: bool=False) -> list[tuple[str, str]]:
     """Convert a dictionary to a list of tuples.
 
     Args:
@@ -17,6 +17,11 @@ def dict_to_list(obj: dict[str, Any]) -> list[tuple[str, str]]:
     """
     obj_list = []
     for key, value in obj.items():
-        obj_list.append((key, value))
+        if exclude_none:
+            if value:
+                obj_list.append((key, value))
+        else:
+            obj_list.append((key, value))
+
 
     return obj_list

@@ -1,11 +1,15 @@
 from typing import Optional
+from loguru import logger
 
 from request import Request
+from utils.data import list_of_tuples_from_dict
+from utils.log import format_log_content
 
 
-class NOAAStations():
-    """Class for fetching the available stations from the NOAA API."""
+class NOAAStations(Request):
+    """Class to fetch available stations from the NOAA API."""
     def __init__(self) -> None:
+        super().__init__("stations")
         self.data = None
 
     async def fetch_stations(
@@ -39,8 +43,9 @@ class NOAAStations():
             "limit": limit,
         }
 
-        req = Request()
-        data = await req.get_with_offsets("stations", params_dict, offsets)
+        params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
+        logger.info(format_log_content(context="Fetching stations...", params=params_list))
+        data = await self.get_with_offsets(params_dict, offsets)
         return data
 
 
