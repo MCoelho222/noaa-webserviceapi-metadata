@@ -106,12 +106,12 @@ class NOAAData(Request):
         # If the location's whitelist is complete,
         if loc_whitelist and loc_whitelist["metadata"] == "C":
             stationsids = loc_whitelist[locationid]
-            self.set_is_whitelist_complete(True)
+            self.is_whitelist_complete = True
             # redefine'stationids' to include only the ones in the whitelist
         else:
             noaa_stations = NOAAStations()
-            self.set_is_whitelist_complete(False)
-            offsets = await noaa_stations.fetch_for_offsets(params)
+            self.is_whitelist_complete = False
+            offsets = await noaa_stations.check_offsets_need(params)
             stations = await noaa_stations.fetch_stations(
                 datasetid=self.datasetid,
                 locationid=locationid,
@@ -133,7 +133,7 @@ class NOAAData(Request):
                 try:
                     # Add station id to query string
                     if stations_count == len(stationsids) and not self.is_whitelist_complete:
-                        self.set_is_whitelist_last_item(True)
+                        self.is_whitelist_last_item = True
 
                     result = await self.fetch_data(stationid=station_id, locationid=locationid)
                     
@@ -187,7 +187,7 @@ if __name__ == "__main__":
         }
 
         noaa_loc = NOAALocations()
-        offsets = await noaa_loc.fetch_for_offsets(loc_params)
+        offsets = await noaa_loc.check_offsets_need(loc_params)
         locations = await noaa_loc.fetch_locations(
             datasetid=datasetid,
             locationcategoryid=locationcategoryid,

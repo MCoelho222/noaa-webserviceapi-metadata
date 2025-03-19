@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from typing import Optional
 
+from utils.data import list_of_tuples_from_dict
 from utils.log import format_log_content
 
 load_dotenv()
@@ -23,7 +24,7 @@ class Whitelist():
         }
 
     This whitelist is supposed to store query parameters that return actual data (non-empty)
-    when fetching the NOAA Webservice API. In this example, the target key is the 'locationid'
+    when fetching the NOAA Web Services API. In this example, the target key is the 'locationid'
     from the URL being fetched (e.g., 'FIPS:BR') and the values come from the 'stationid' query
     parameter. The 'metadata' key contains the status of each key's whitelist. "C" stands for
     "complete" and "I" for "incomplete". A key's whitelist is complete when all the available
@@ -75,7 +76,7 @@ class Whitelist():
             return None
 
 
-    def is_whitelist_ready(self, params: list[tuple[str, str]]) -> bool:
+    def is_whitelist_ready(self, q_params: dict[str, str]) -> bool:
         """Checks if the whitelist is ready to be used.
 
         Is a whitelist path defined?
@@ -88,6 +89,8 @@ class Whitelist():
         Returns:
             bool: True if the whitelist is ready, False otherwise.
         """
+        params_list = list_of_tuples_from_dict(q_params)
+
         if not self.whitelist_path:
             logger.debug("Whitelist path is missing")
             return False
@@ -100,11 +103,11 @@ class Whitelist():
             logger.error("Both 'whitelist_key' and 'whitelist_value' must be provided")
             return False
 
-        if self.whitelist_key and self.whitelist_key not in [param[0] for param in params]:
+        if self.whitelist_key and self.whitelist_key not in [param[0] for param in params_list]:
             logger.error("Missing 'whitelist_key' in the query parameters")
             return False
         
-        if self.whitelist_value and self.whitelist_value not in [param[0] for param in params]:
+        if self.whitelist_value and self.whitelist_value not in [param[0] for param in params_list]:
             logger.error("Missing 'whitelist_value' in the query parameters")
             return False
 
