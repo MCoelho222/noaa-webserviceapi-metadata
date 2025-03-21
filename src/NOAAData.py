@@ -162,7 +162,7 @@ if __name__ == "__main__":
     import asyncio
     import numpy as np
 
-    async def main(batch_init=0, batch_end=5):
+    async def main(batch_init=0, batch_end=None):
         WHITELIST_PATH = "whitelist.json"
         datasetid = "GSOM"
         locationcategoryid = "CNTRY"
@@ -204,7 +204,8 @@ if __name__ == "__main__":
         else:
             logger.debug("No locations found")
 
-        for locationid in locations_list[batch_init:batch_end]:
+        locations_list = locations_list[batch_init:batch_end] if batch_end is not None else locations_list[batch_init:]
+        for locationid in locations_list:
 
             data = await noaa_data.fetch_location_data_by_stations(locationid=locationid)
 
@@ -215,7 +216,7 @@ if __name__ == "__main__":
 
             noaa_data.save_whitelist()
     
-    asyncio.run(main(batch_init=2, batch_end=3))
+    asyncio.run(main())
 
 
 

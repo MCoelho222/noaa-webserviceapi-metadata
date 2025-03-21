@@ -111,7 +111,7 @@ class Request(Whitelist):
                 logger.info(format_log_content(context=f"Fetching offset {count}/{total_count}...", params=[("Endpoint", self.endpoint)]))
 
                 q_params["offset"] = offset
-                res_data = await self.get(self.endpoint, q_params)
+                res_data = await self.get(q_params)
 
                 if "metadata" in data and "metadata" not in res_data.keys():
                     data["metadata"] = res_data["metadata"]
