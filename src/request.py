@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import os
+import json
 import numpy as np
 from typing import Any, Optional
 from loguru import logger
@@ -23,8 +24,15 @@ class Request(Whitelist):
         whitelist_key (str, optional): The query parameter that represents a key in the whitelist.
         whitelist_value (str, optional): The query parameter that represents a value in the whitelist.
     """
-    def __init__(self, endpoint: str, whitelist_path: Optional[str]=None, whitelist_key: Optional[str]=None, whitelist_value: Optional[str]=None):
-        super().__init__(whitelist_path, whitelist_key, whitelist_value)
+    def __init__(
+        self,
+        endpoint: str,
+        whitelist_path: Optional[str]=None,
+        whitelist_key: Optional[str]=None,
+        whitelist_value: Optional[str]=None,
+        whitelist_title: Optional[str]=None,
+        whitelist_description: Optional[str]=None) -> None:
+        super().__init__(whitelist_path, whitelist_key, whitelist_value, whitelist_title, whitelist_description)
         self.endpoint = endpoint
 
 
@@ -76,15 +84,20 @@ class Request(Whitelist):
                                 if not data:
                                     logger.debug("Empty data")
                                 elif "metadata" in data.keys():
-                                    results = len(data["results"])
+                                    size_bytes = len(json.dumps(data["results"]).encode("utf-8"))  # Convert JSON to bytes
                                     available = data["metadata"]["resultset"]["count"]
-                                    logger.success(format_log_content(params=[("Status", 200), ("Items", f"{results}/{available}")]))
+                                    logger.success(format_log_content(params=[("Status", 200), ("Items", f"{len(data["results"])}/{available}")]))
 
                                     # The whitelist is used for the 'data' endpoint only
-                                    if self.endpoint == "data" and self.whitelist and not self.is_key_whitelist_complete:
+                                    if self.endpoint == "data" and self.whitelist and not self.is_sub_whitelist_complete:
                                         self.add_to_whitelist(
                                             key=q_params[self.whitelist_key],
-                                            value=q_params[self.whitelist_value])
+                                            value=q_params[self.whitelist_value],
+                                            metadata={
+                                                "items": len(data["results"]),
+                                                "size": size_bytes
+                                            }
+                                        )
                                 return data
                             except aiohttp.ContentTypeError:
                                 logger.error("Failed to parse JSON response")

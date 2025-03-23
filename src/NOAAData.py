@@ -17,9 +17,10 @@ class NOAAData(Request):
         enddate: str,
         whitelist_path: Optional[str]=None,
         whitelist_key: Optional[str]=None,
-        whitelist_value: Optional[str]=None) -> None:
-
-        super().__init__("data", whitelist_path, whitelist_key, whitelist_value)
+        whitelist_value: Optional[str]=None,
+        whitelist_title: Optional[str]=None,
+        whitelist_description: Optional[str]=None) -> None:
+        super().__init__("data", whitelist_path, whitelist_key, whitelist_value, whitelist_title, whitelist_description)
 
         self.datasetid = datasetid
         self.startdate = startdate
@@ -109,10 +110,10 @@ class NOAAData(Request):
         whitelist = self.retrieve_whitelist(locationid)
 
         # If the location's whitelist is complete,
-        self.is_key_whitelist_complete = False
-        if whitelist and whitelist["metadata"] == "C":
+        self.is_sub_whitelist_complete = False
+        if whitelist and whitelist["metadata"]["status"] == "C":
             stationsids = whitelist[locationid]
-            self.is_key_whitelist_complete = True
+            self.is_sub_whitelist_complete = True
             # redefine'stationids' to include only the ones in the whitelist
         else:
             noaa_stations = NOAAStations()
@@ -132,11 +133,11 @@ class NOAAData(Request):
         complete_dataset = []  # Store all the data
 
         if stationsids:
-            stations_count = 1  # Track whether all station have been screened
-            self.is_whitelist_last_item = False
+            stations_count = 1  # Track whether all stations have been screened
+            self.sub_whitelist_total_items = len(stationsids)
             for station_id in stationsids:
                 try:
-                    if stations_count == len(stationsids) and not self.is_key_whitelist_complete:
+                    if stations_count == len(stationsids) and not self.is_sub_whitelist_complete:
                         self.is_whitelist_last_item = True
 
                     result = await self.fetch_data(stationid=station_id, locationid=locationid)
@@ -158,6 +159,7 @@ class NOAAData(Request):
                 else:
                     logger.debug(log_content)
 
+        self.reset_whitelist()
         self.data = complete_dataset
         return complete_dataset
 
@@ -179,7 +181,9 @@ if __name__ == "__main__":
             enddate=enddate,
             whitelist_path=WHITELIST_PATH,
             whitelist_key="locationid",
-            whitelist_value="stationid"
+            whitelist_value="stationid",
+            whitelist_title="CNTRY",
+            whitelist_description="Stations' IDs and metadata for countries"
         )
 
         # Get all the available locations in the 'CNTRY' category within the specified time range
@@ -220,7 +224,7 @@ if __name__ == "__main__":
 
             noaa_data.save_whitelist()
     
-    asyncio.run(main(batch_end=2))
+    asyncio.run(main(batch_end=3))
 
 
 
