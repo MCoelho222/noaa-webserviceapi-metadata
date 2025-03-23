@@ -26,7 +26,6 @@ class Request(Whitelist):
     def __init__(self, endpoint: str, whitelist_path: Optional[str]=None, whitelist_key: Optional[str]=None, whitelist_value: Optional[str]=None):
         super().__init__(whitelist_path, whitelist_key, whitelist_value)
         self.endpoint = endpoint
-        self.has_data = False
 
 
     async def get(self, q_params: Optional[dict[str, str]]=None, max_retries: Optional[int]=5) -> Optional[dict]:
@@ -46,7 +45,7 @@ class Request(Whitelist):
         Returns:
             dict or None: The parsed content of the response object, or None if the request fails.
         """
-        token = os.getenv("NOAA_GMAIL_TOKEN")
+        token = os.getenv("NOAA_HOTMAIL_TOKEN")
         if not token:
             logger.error("API token is missing. Set the NOAA_API_TOKEN environment variable.")
             return None
@@ -54,8 +53,6 @@ class Request(Whitelist):
         baseurl = os.getenv("NOAA_API_URL")  # Base URL for the NOAA Web Services API
         q_string = self.build_query_string_from_dict(q_params)
         url = f"{baseurl}{self.endpoint}?{q_string}" if q_string else f"{baseurl}{self.endpoint}"
-
-        self.has_data = False
 
         semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
         async with semaphore:
@@ -78,19 +75,16 @@ class Request(Whitelist):
 
                                 if not data:
                                     logger.debug("Empty data")
-                                else:
-                                    self.has_data = True
-                                    results = len(data["results"]) if "results" in data else 0
-                                    available = data["metadata"]["resultset"]["count"] if "metadata" in data else 0
+                                elif "metadata" in data.keys():
+                                    results = len(data["results"])
+                                    available = data["metadata"]["resultset"]["count"]
                                     logger.success(format_log_content(params=[("Status", 200), ("Items", f"{results}/{available}")]))
 
                                     # The whitelist is used for the 'data' endpoint only
-                                    if self.endpoint == "data":
-                                        if self.whitelist and not self.is_whitelist_complete:
-                                            if self.is_whitelist_ready(q_params):
-                                                self.add_to_whitelist(
-                                                    key=q_params[self.whitelist_key],
-                                                    value=q_params[self.whitelist_value])
+                                    if self.endpoint == "data" and self.whitelist and not self.is_key_whitelist_complete:
+                                        self.add_to_whitelist(
+                                            key=q_params[self.whitelist_key],
+                                            value=q_params[self.whitelist_value])
                                 return data
                             except aiohttp.ContentTypeError:
                                 logger.error("Failed to parse JSON response")
@@ -101,46 +95,55 @@ class Request(Whitelist):
 
 
     async def get_with_offsets(self, q_params: dict[str, str], offsets: list[int]):
-        if len(offsets) == 1:
-            data = await self.get(q_params)
-        else:
-            data = {"metadata": {}, "results": []}
-            count = 1  # Keep track of offsets
-            total_count = len(offsets)
-            for offset in offsets:
-                logger.info(format_log_content(context=f"Fetching offset {count}/{total_count}...", params=[("Endpoint", self.endpoint)]))
+        if not offsets:
+            raise ValueError("'offsets' should not be empty")
 
+        offsets_length = len(offsets)
+        all_data = {}
+        count = 1  # Keep track of offsets
+        results = []
+        for offset in offsets:
+            if offsets_length > 1:
                 q_params["offset"] = offset
-                res_data = await self.get(q_params)
+                logger.info(format_log_content(context=f"Fetching offset {count}/{offsets_length}...", params=[("Endpoint", self.endpoint)]))
 
-                if "metadata" in data and "metadata" not in res_data.keys():
-                    data["metadata"] = res_data["metadata"]
-                if data and "results" in res_data.keys():
-                    data["results"].extend(res_data["results"])
+            data = await self.get(q_params)
 
-                count += 1
+            if data and "metadata" in data.keys():
+                if not results :  # Since all responses will contain the same metadata, include only the first one
+                    all_data["metadata"] = data["metadata"]
 
-        return data
+                results.extend(data["results"])
+
+            count += 1
+
+        all_data["results"] = results
+        return all_data
 
     
-    async def check_offsets_need(self, q_params: dict[str, Any]) -> list[int]:
+    async def check_offsets_required(self, q_params: dict[str, Any]) -> list[int]:
         logger.info("Fetching for offsets...")
         q_params["limit"] = 1
         result = await self.get(q_params)
-        if result and "metadata" in result.keys():
-            count = result["metadata"]["resultset"]["count"]
 
-            return self.calculate_offsets(int(count))
+        if result:
+            if result and "metadata" in result.keys():
+                count = result["metadata"]["resultset"]["count"]
+
+                return self.calculate_offsets(int(count))
         
         logger.debug("Empty data or 'metadata' not in response")
+        return [0]
 
 
     @staticmethod
-    def process_response_json(res_json: dict[str, str], option: str) -> np.ndarray | dict[str, str] | list[str] | None:
+    def process_response_json(
+        res_json: dict[str, dict[str, str | int] | list[dict[str, str]]],
+        option: str) -> dict[str, str | int] | list[dict[str, str]] | np.ndarray[str] | list[str]:
         """Process a response fetched from the NOAA API."
 
         Args:
-            response (dict): The response fetched from the NOAA API.
+            res_json (dict[str, dict[str, str | int] | list[dict[str, str]]]): The response fetched from the NOAA API.
             option (str): The option to retrieve from the response. 
                 Options: 'metadata', 'results', 'ids', 'names', 'ids_names_dict', 'names_ids_dict'.
         """
@@ -165,37 +168,11 @@ class Request(Whitelist):
 
 
     @staticmethod
-    def build_query_string_from_dict(params_dict: Optional[dict[str, str]]) -> str:
-        return "&".join([f"{key}={value}" for key, value in params_dict.items() if value])
-    
-
-    @staticmethod
-    def dict_from_url_params(url: str, params: Optional[list[str]] = None) -> dict[str, str] | list[tuple[str, str]]:
-        """Extract specified query parameters from a URL.
-
-        Args:
-            params (list[str] | None): A list with parameters' names to be included (e.g., ['stationid', 'itemid']).
-            url (str): The URL with query parameters
-            mode (str): The return mode. If
-                'dict', returns a dictionary with the query parameter as key:value. Default is 'dict'.
-                'list', returns a list of tuples. Default is 'dict'.
-
-        Returns:
-            dict[str, str] | list[tuple[str, str]]: A dictionary with the query parameter as key:value.
-                If params is None, returns a dictionary with all the query parameters.
-                If mode is 'list', returns a list of tuples.
-        """
-        url_split_len = len(url.split('?'))
-        q_params = url.split('?')[1].split('&') if url_split_len > 1 else url.split('?')[0].split('&')
-        parsed_params = {}
-        for param in q_params:
-            key_value = param.split('=')
-            if params and key_value[0] in params:
-                parsed_params[key_value[0]] = key_value[1]
-            elif not params:
-                parsed_params[key_value[0]] = key_value[1]
-
-        return parsed_params
+    def build_query_string_from_dict(params_dict: dict[str, str | int]) -> str:
+        if params_dict:
+            return "&".join([f"{key}={value}" for key, value in params_dict.items() if value])
+        else:
+            return ""
 
 
     @staticmethod
@@ -220,14 +197,15 @@ class Request(Whitelist):
             offsets[0] = 0
 
             if len(offsets) > 3:
-                log_content = f"Using offsets: [{offsets[0]}, {offsets[1]}, {offsets[2]}, ...,{offsets[-1]}]"
+                content = f"[{offsets[0]}, {offsets[1]}, {offsets[2]}, ...,{offsets[-1]}]"
             if len(offsets) == 3:
-                log_content = f"Using offsets: [{offsets[0]}, {offsets[1]}, ...,{offsets[-1]}]"
+                content = f"[{offsets[0]}, {offsets[1]}, ...,{offsets[-1]}]"
             if len(offsets) == 2:
-                log_content = f"Using offsets: [{offsets[0]}, ...,{offsets[-1]}]"
+                content = f"[{offsets[0]}, ...,{offsets[-1]}]"
             
-            logger.info(log_content)
+            logger.info("Using offsets: " + content)
             return offsets
 
-        logger.info("No offsets needed")
+        logger.info("Offsets not required")
         return [0]
+    

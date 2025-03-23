@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 from loguru import logger
 from typing import Optional
 
-from utils.data import list_of_tuples_from_dict
 from utils.log import format_log_content
 
 load_dotenv()
@@ -43,18 +42,20 @@ class Whitelist():
         self.whitelist_path = whitelist_path
         self.whitelist_key = whitelist_key
         self.whitelist_value = whitelist_value
+        self.whitelist = self._create_or_load_whitelist()
 
-        self.is_whitelist_complete = False
+        # Attributes to manage the whitelist from child classes
+        self.is_key_whitelist_complete = False
         self.is_whitelist_last_item = False  # Used to track whether a new item is the last one from a whitelist
-        self.whitelist = self.create_or_load_whitelist()
+        
 
-    def create_or_load_whitelist(self) -> dict[str, list[str] | dict[str, str]] | None:
+    def _create_or_load_whitelist(self) -> dict[str, list[str] | dict[str, str]]:
         """Creates a whitelist or loads an existent one.
 
         Returns:
             dict: The whitelist JSON file.
         """
-        if self.whitelist_path:
+        if self._is_whitelist_ready():
             log_params = [("Path", self.whitelist_path)]
             try:
                 if not os.path.exists(self.whitelist_path):
@@ -73,10 +74,10 @@ class Whitelist():
             except Exception:
                 logger.exception(msg="Whitelist could not be loaded or created")
         else:
-            return None
+            return {}
 
 
-    def is_whitelist_ready(self, q_params: dict[str, str]) -> bool:
+    def _is_whitelist_ready(self) -> bool:
         """Checks if the whitelist is ready to be used.
 
         Is a whitelist path defined?
@@ -89,26 +90,10 @@ class Whitelist():
         Returns:
             bool: True if the whitelist is ready, False otherwise.
         """
-        params_list = list_of_tuples_from_dict(q_params)
-
         if not self.whitelist_path:
-            logger.debug("Whitelist path is missing")
             return False
-
-        if self.whitelist_path and (not self.whitelist_key or not self.whitelist_value):
+        elif not self.whitelist_key or not self.whitelist_value:
             logger.error("Both 'whitelist_key' and 'whitelist_value' must be provided")
-            return False
-
-        if (self.whitelist_key and not self.whitelist_value) or (self.whitelist_value and not self.whitelist_key):
-            logger.error("Both 'whitelist_key' and 'whitelist_value' must be provided")
-            return False
-
-        if self.whitelist_key and self.whitelist_key not in [param[0] for param in params_list]:
-            logger.error("Missing 'whitelist_key' in the query parameters")
-            return False
-        
-        if self.whitelist_value and self.whitelist_value not in [param[0] for param in params_list]:
-            logger.error("Missing 'whitelist_value' in the query parameters")
             return False
 
         return True
@@ -121,29 +106,22 @@ class Whitelist():
             key (str): The whitelist key where the value should be included (e.g., 'FIPS:BR')
             value (str): The value to be included in the given whitelist key.
         """
-        if self.whitelist:
-            try:
-                log_params = [("Key", key), ("Value", value)]
-
-                if key in self.whitelist.keys():
-                    if value not in self.whitelist[key]:
-                        self.whitelist[key].append(value)
-                    else:
-                        logger.debug(format_log_content(context="Already in whitelist", params=log_params))
-
-                    if self.is_whitelist_last_item:
-                        self.whitelist["metadata"][key] = "C"
-                        self.is_whitelist_complete = True
-                        logger.success(format_log_content(context="Whitelist complete", params=log_params))
-                else:
-                    self.whitelist["metadata"][key] = "C" if self.is_whitelist_last_item else "I"
-                    self.whitelist[key] = [value,]
-                    if self.is_whitelist_last_item:
-                        logger.success(format_log_content(context="Whitelist complete", params=log_params))
-            except Exception:
-                logger.exception(format_log_content(context="Failed adding to whitelist", params=log_params))
-        else:
-            logger.debug("No whitelist defined")
+        try:
+            log_params = [("Key", key), ("Value", value)]
+            if key in self.whitelist.keys():
+                self.whitelist[key].add(value)
+                if self.is_whitelist_last_item:
+                    self.whitelist["metadata"][key] = "C"
+                    logger.success(format_log_content(context="Key's whitelist complete", params=log_params))
+            elif self.is_whitelist_last_item:
+                self.whitelist["metadata"][key] = "C"
+                self.whitelist[key] = {value}
+                logger.success(format_log_content(context="Key's whitelist complete", params=log_params))
+            elif not self.is_whitelist_last_item:
+                self.whitelist["metadata"][key] = "I"
+                self.whitelist[key] = {value}
+        except Exception:
+            logger.exception(format_log_content(context="Failed adding to whitelist", params=log_params))
 
 
     def retrieve_whitelist(self, target_key: Optional[str] = None) -> dict[str, list[str] | dict[str, str]]:
@@ -173,10 +151,13 @@ class Whitelist():
 
 
     def save_whitelist(self) -> None:
-        """Saves the whitelist to the whitelist path."""
+        """Saves the whitelist."""
         if self.whitelist:
             try:
                 with open(self.whitelist_path, "w") as f:
+                    for key, value in self.whitelist.items():
+                        if key != "metadata":
+                            self.whitelist[key] = list(value)
                     json.dump(self.whitelist, f, indent=4)
                 logger.success(f"Whitelist saved to: {self.whitelist_path}")
             except FileNotFoundError:

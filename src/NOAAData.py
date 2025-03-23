@@ -57,7 +57,12 @@ class NOAAData(Request):
             "limit": limit,
             "includemetadata": includemetadata,
         }
-        
+        if self.whitelist:
+            if self.whitelist_key not in params_dict.keys():
+                raise ValueError("Whitelist key should be in the query parameters")
+            if self.whitelist_value not in params_dict.keys():
+                raise ValueError("Whitelist value should be in the query parameters")
+
         params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
         logger.info(format_log_content(context="Fetching data...", params=params_list))
         data = await self.get_with_offsets(params_dict, offsets)
@@ -66,16 +71,16 @@ class NOAAData(Request):
 
 
     async def fetch_location_data_by_stations(self, locationid: str, verbose: Optional[bool]=0) -> list[dict[str, Any]]:
-        """Fetches station data for a specific country within a date range.
+        """Fetches data from a specific location using stations to
+        avoid heavy loads in requests.
 
-        This function retrieves station data from an external source for a given dataset,
-        country location, a list of station IDs, and time range. It checks if the location is
-        already in the whitelist, and if all its stations were already screened. If yes,
-        it replaces the stations list provided by the one in the whitelist. Otherwise, it proceeds
-        with the fecthing and whitelist updating operations. Additionally, if 'step_months' is
-        provided, the time range is split into intervals, to avoid reaching the items max-limit per request.
+        It checks if the location is already in the whitelist, and
+        if all its stations were already screened. If yes, it replaces
+        the stations list provided by the one in the whitelist. Otherwise,
+        it proceeds with the fecthing and whitelist updating operations.
 
         Args:
+            locationid (str): The ID of the desired location.
             verbose (Optional[bool], default=False): A flag to enable verbose logging.
 
         Returns:
@@ -101,17 +106,17 @@ class NOAAData(Request):
         stationsids = None
 
         # Try to retrieve whitelist for the given location (e.g., 'BR')
-        loc_whitelist = self.retrieve_whitelist(locationid)
+        whitelist = self.retrieve_whitelist(locationid)
 
         # If the location's whitelist is complete,
-        if loc_whitelist and loc_whitelist["metadata"] == "C":
-            stationsids = loc_whitelist[locationid]
-            self.is_whitelist_complete = True
+        self.is_key_whitelist_complete = False
+        if whitelist and whitelist["metadata"] == "C":
+            stationsids = whitelist[locationid]
+            self.is_key_whitelist_complete = True
             # redefine'stationids' to include only the ones in the whitelist
         else:
             noaa_stations = NOAAStations()
-            self.is_whitelist_complete = False
-            offsets = await noaa_stations.check_offsets_need(params)
+            offsets = await noaa_stations.check_offsets_required(params)
             stations = await noaa_stations.fetch_stations(
                 datasetid=self.datasetid,
                 locationid=locationid,
@@ -126,13 +131,12 @@ class NOAAData(Request):
 
         complete_dataset = []  # Store all the data
 
-        # Stations counter to track when all station have been sreened
         if stationsids:
-            stations_count = 1
+            stations_count = 1  # Track whether all station have been screened
+            self.is_whitelist_last_item = False
             for station_id in stationsids:
                 try:
-                    # Add station id to query string
-                    if stations_count == len(stationsids) and not self.is_whitelist_complete:
+                    if stations_count == len(stationsids) and not self.is_key_whitelist_complete:
                         self.is_whitelist_last_item = True
 
                     result = await self.fetch_data(stationid=station_id, locationid=locationid)
@@ -187,7 +191,7 @@ if __name__ == "__main__":
         }
 
         noaa_loc = NOAALocations()
-        offsets = await noaa_loc.check_offsets_need(loc_params)
+        offsets = await noaa_loc.check_offsets_required(loc_params)
         locations = await noaa_loc.fetch_locations(
             datasetid=datasetid,
             locationcategoryid=locationcategoryid,
@@ -216,7 +220,7 @@ if __name__ == "__main__":
 
             noaa_data.save_whitelist()
     
-    asyncio.run(main())
+    asyncio.run(main(batch_end=2))
 
 
 
