@@ -10,7 +10,6 @@ class NOAAStations(Request):
     """Class to fetch available stations from the NOAA API."""
     def __init__(self) -> None:
         super().__init__("stations")
-        self.data = None
 
     async def fetch_stations(
         self,
@@ -23,8 +22,8 @@ class NOAAStations(Request):
         enddate: Optional[str]=None,
         sortfield: Optional[str]=None,
         sortorder: Optional[str]=None,
-        limit: Optional[str]=1000,
-        offsets: Optional[list[int]]=[0]) -> dict[str, str] | None:
+        limit: int=1000,
+        offsets: Optional[list[int]]=None) -> dict[str, str] | None:
         """Download the available stations according to the specified parameters.
 
         Returns:
@@ -45,7 +44,13 @@ class NOAAStations(Request):
 
         params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
         logger.info(format_log_content(context="Fetching stations...", params=params_list))
-        data = await self.get_with_offsets(params_dict, offsets)
+
+        calculated_offsets = offsets
+        if offsets is None:
+            calculated_offsets = await self.fetch_one_and_calculate_offsets(params_dict)
+        
+        data = await self.get_with_offsets(params_dict, calculated_offsets)
+
         return data
 
 

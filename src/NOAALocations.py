@@ -21,8 +21,8 @@ class NOAALocations(Request):
         enddate: Optional[str]=None,
         sortfield: Optional[str]=None,
         sortorder: Optional[str]=None,
-        limit: Optional[str]=1000,
-        offsets: Optional[list[int]]=[0]) -> dict[str, str]:
+        limit: int=1000,
+        offsets: Optional[list[int]]=None) -> dict[str, str]:
         """Fetch the locations from the NOAA API.
 
         Returns:
@@ -40,7 +40,12 @@ class NOAALocations(Request):
         }
         params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
         logger.info(format_log_content(context="Fetching locations...", params=params_list))
-        data = await self.get_with_offsets(params_dict, offsets)
+
+        calculated_offsets = offsets
+        if offsets is None:
+            calculated_offsets = await self.fetch_one_and_calculate_offsets(params_dict)
+
+        data = await self.get_with_offsets(params_dict, calculated_offsets)
         return data
 
 
@@ -49,9 +54,9 @@ if __name__ == "__main__":
 
     async def main():
         noaa_locations = NOAALocations()
-        locations = await noaa_locations.fetch_locations(datasetid='GSOM', locationcategoryid='CITY')
-        if locations:
-            print(locations["metadata"])
-            print(locations["results"][:5])
+        data = await noaa_locations.fetch_locations(datasetid='GSOM', locationcategoryid='CITY')
+        if data:
+            print(data["metadata"])
+            print(len(data["results"]))
     
     asyncio.run(main())

@@ -1,5 +1,5 @@
 import re
-
+import os
 from typing import Any
 
 
@@ -54,3 +54,14 @@ def parse_size(size_str: str) -> int:
         raise ValueError(f"Unknown unit: {unit}")
 
     return int(size_value * size_units[unit])  # Convert to bytes and return as integer
+
+def save_data_to_csv(data: list[dict[str, Any]], file_path: str) -> str:
+    for item in data:
+        csv_line =  ",".join([str(value) for value in item.values()])
+        if os.path.exists(file_path):
+            with open(file_path, "a") as file:
+                file.write(f"{csv_line}\n")
+        else:
+            with open(file_path, "w") as file: 
+                file.write(f"{','.join(item.keys())}\n")
+                file.write(f"{csv_line}\n")

@@ -4,3 +4,4 @@
 __pycache__
 whitelist.json
 whitelist_test.json
+*.csv

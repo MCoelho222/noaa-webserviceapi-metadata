@@ -3,6 +3,7 @@ import asyncio
 import os
 import json
 import numpy as np
+import xml.etree.ElementTree as ET
 from typing import Any, Optional
 from loguru import logger
 
@@ -34,6 +35,8 @@ class Request(Whitelist):
         whitelist_description: Optional[str]=None) -> None:
         super().__init__(whitelist_path, whitelist_key, whitelist_value, whitelist_title, whitelist_description)
         self.endpoint = endpoint
+        self.requests_count = 0  # Counter for the number of requests made
+        self.success_count = 0  # Counter for the number of successful requests
 
 
     async def get(self, q_params: Optional[dict[str, str]]=None, max_retries: Optional[int]=5) -> Optional[dict]:
@@ -69,16 +72,32 @@ class Request(Whitelist):
                 for attempt in range(max_retries):  # Maximum of 5 retries
                     try:
                         async with session.get(url, headers={"token": token}) as res:
+                            self.requests_count += 1  # Increment the request count
                             if res.status == 503:
                                 wait_time = 2 ** attempt  # Exponential backoff
                                 logger.debug(f"503 Service Unavailable. Retrying {attempt + 1}/{max_retries} in {wait_time} seconds...")
                                 await asyncio.sleep(wait_time)
                                 continue  # Retry the request
                             if res.status != 200:
-                                logger.error(f"Status {res.status}")
+                                try:
+                                    error_text = await res.text()
+
+                                    # Parse XML and extract <developerMessage>
+                                    try:
+                                        root = ET.fromstring(error_text)
+                                        dev_msg = root.findtext('developerMessage')
+                                        message = dev_msg or "Unknown error"
+                                    except ET.ParseError:
+                                        message = f"Unparseable XML: {error_text}"
+
+                                except Exception as e:
+                                    message = f"Could not read response body: {e}"
+
+                                logger.error(f"Status {res.status}: {message}")
                                 return None
 
                             try:  # If status code is 200, try to parse the JSON response
+                                self.success_count += 1  # Increment the success count
                                 data = await res.json()
 
                                 if not data:
@@ -86,7 +105,7 @@ class Request(Whitelist):
                                 elif "metadata" in data.keys():
                                     size_bytes = len(json.dumps(data["results"]).encode("utf-8"))  # Convert JSON to bytes
                                     available = data["metadata"]["resultset"]["count"]
-                                    logger.success(format_log_content(params=[("Status", 200), ("Items", f"{len(data["results"])}/{available}")]))
+                                    logger.success(format_log_content(params=[("Status", 200), ("Returned items", f"{len(data["results"])}/{available}")]))
 
                                     # The whitelist is used for the 'data' endpoint only
                                     if self.endpoint == "data" and self.whitelist and not self.is_sub_whitelist_complete:
@@ -108,13 +127,14 @@ class Request(Whitelist):
 
 
     async def get_with_offsets(self, q_params: dict[str, str], offsets: list[int]):
-        if not offsets:
+        if len(offsets) == 0:
             raise ValueError("'offsets' should not be empty")
-
+        
         offsets_length = len(offsets)
         all_data = {}
         count = 1  # Keep track of offsets
         results = []
+
         for offset in offsets:
             if offsets_length > 1:
                 q_params["offset"] = offset
@@ -123,20 +143,22 @@ class Request(Whitelist):
             data = await self.get(q_params)
 
             if data and "metadata" in data.keys():
-                if not results :  # Since all responses will contain the same metadata, include only the first one
+                if not results:  # Since all responses will contain the same metadata, include only the first one
                     all_data["metadata"] = data["metadata"]
-
                 results.extend(data["results"])
 
             count += 1
 
-        all_data["results"] = results
+        if results:
+            all_data["results"] = results
+
         return all_data
 
     
-    async def check_offsets_required(self, q_params: dict[str, Any]) -> list[int]:
+    async def fetch_one_and_calculate_offsets(self, q_params: dict[str, Any]) -> list[int]:
         logger.info("Fetching for offsets...")
-        q_params["limit"] = 1
+        limited_q_params = q_params.copy()
+        limited_q_params["limit"] = 1
         result = await self.get(q_params)
 
         if result:
@@ -210,15 +232,31 @@ class Request(Whitelist):
             offsets[0] = 0
 
             if len(offsets) > 3:
-                content = f"[{offsets[0]}, {offsets[1]}, {offsets[2]}, ...,{offsets[-1]}]"
+                content = f"[{offsets[0]}, {offsets[1]}, {offsets[2]}, ..., {offsets[-1]}]"
             if len(offsets) == 3:
-                content = f"[{offsets[0]}, {offsets[1]}, ...,{offsets[-1]}]"
+                content = f"[{offsets[0]}, {offsets[1]}, ..., {offsets[-1]}]"
             if len(offsets) == 2:
-                content = f"[{offsets[0]}, ...,{offsets[-1]}]"
+                content = f"[{offsets[0]}, {offsets[-1]}]"
             
             logger.info("Using offsets: " + content)
             return offsets
 
         logger.info("Offsets not required")
         return [0]
+
+if __name__ == "__main__":
+    import time
+
+    async def main():
+        endpoint = "data"
+        req = Request(endpoint)
+        stations = ["GHCND:AE000041196", "GHCND:AEM00041194", "GHCND:AEM00041217", "GHCND:AEM00041218", "GHCND:MUM00041242", "GHCND:MUM00041242"]
+        tasks = [req.get(q_params={"datasetid": "GSOM", "startdate": "2024-01-01", "enddate": "2025-01-01", "stationid": station, "locationid": "FIPS:AE"}) for station in stations]
+        start_all = time.time()
+        results = await asyncio.gather(*tasks)
+        print(results)
+        end_all = time.time()
+        print(f"Time for all requests: {end_all - start_all}")
     
+    asyncio.run(main())
+

@@ -2,11 +2,12 @@ from datetime import datetime
 from typing import Any, Optional
 from loguru import logger
 
-from request import Request
-from utils.data import list_of_tuples_from_dict
-from utils.log import format_log_content
 from NOAAStations import NOAAStations
 from NOAALocations import NOAALocations
+from request import Request
+from utils.data import list_of_tuples_from_dict, save_data_to_csv
+from utils.date import generate_year_date_range, is_more_than_10_years
+from utils.log import format_log_content
 
 
 class NOAAData(Request):
@@ -25,8 +26,6 @@ class NOAAData(Request):
         self.datasetid = datasetid
         self.startdate = startdate
         self.enddate = enddate
-        
-        self.data = None
 
 
     async def fetch_data(
@@ -37,8 +36,8 @@ class NOAAData(Request):
         units: Optional[str]=None,
         sortfield: Optional[str]=None,
         sortorder: Optional[str]=None,
-        limit: Optional[str]=1000,
-        offsets: Optional[list[int]]=[0],
+        limit: int=1000,
+        offsets: Optional[list[int]]=None,
         includemetadata: Optional[bool]=True) -> dict[str, str] | None:
         """Fetch the data from the NOAA API.
 
@@ -58,20 +57,59 @@ class NOAAData(Request):
             "limit": limit,
             "includemetadata": includemetadata,
         }
+
         if self.whitelist:
             if self.whitelist_key not in params_dict.keys():
                 raise ValueError("Whitelist key should be in the query parameters")
             if self.whitelist_value not in params_dict.keys():
                 raise ValueError("Whitelist value should be in the query parameters")
 
-        params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
-        logger.info(format_log_content(context="Fetching data...", params=params_list))
-        data = await self.get_with_offsets(params_dict, offsets)
-        self.data = data
+        calculated_offsets = offsets
+
+        if is_more_than_10_years(self.startdate, self.enddate):
+            logger.warning("Fetching data for more than 10 years. This may take a while...")
+            ten_year_ranges = generate_year_date_range(self.startdate, self.enddate, 10)
+            
+            data = {
+                "metadata": {},
+                "results": []
+            }
+            for start, end in ten_year_ranges:
+                params_dict["startdate"] = start
+                params_dict["enddate"] = end
+                params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
+                logger.info(format_log_content(context="Fetching data...", params=params_list))
+
+                if offsets is None:
+                    calculated_offsets = await self.fetch_one_and_calculate_offsets(params_dict)
+
+                range_data = await self.get_with_offsets(params_dict, calculated_offsets)
+
+                if range_data:
+                    logger.debug(f"Data found for range: {start} to {end}")
+                    if not data["metadata"]:
+                        data["metadata"] = range_data["metadata"]
+                    data["results"].extend(range_data["results"])
+                else:
+                    logger.debug(f"No data found for range: {start} to {end}")
+        else:
+            params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
+            logger.info(format_log_content(context="Fetching data...", params=params_list))
+
+            if offsets is None:
+                calculated_offsets = await self.fetch_one_and_calculate_offsets(params_dict)
+            data = await self.get_with_offsets(params_dict, calculated_offsets)
+
         return data
 
 
-    async def fetch_location_data_by_stations(self, locationid: str, verbose: Optional[bool]=0) -> list[dict[str, Any]]:
+    async def fetch_location_by_stations(
+            self,
+            locationid: str,
+            startdate: Optional[str]=None,
+            enddate: Optional[str]=None,
+            verbose: Optional[bool]=0,
+            save: bool=False) -> list[dict[str, Any]]:
         """Fetches data from a specific location using stations to
         avoid heavy loads in requests.
 
@@ -92,17 +130,10 @@ class NOAAData(Request):
             FileNotFoundError: If the whitelist file is not found.
         """
         # Validate dates
-        start = datetime.strptime(self.startdate, "%Y-%m-%d")
-        end = datetime.strptime(self.enddate, "%Y-%m-%d")
+        start = datetime.strptime(startdate or self.startdate, "%Y-%m-%d")
+        end = datetime.strptime(enddate or self.enddate, "%Y-%m-%d")
         if start > end:
             raise ValueError("Start date must be before end date")
-
-        params = {
-            "datasetid": self.datasetid,
-            "startdate": self.startdate,
-            "enddate": self.enddate,
-            "locationid": locationid
-        }
 
         stationsids = None
 
@@ -117,13 +148,9 @@ class NOAAData(Request):
             # redefine'stationids' to include only the ones in the whitelist
         else:
             noaa_stations = NOAAStations()
-            offsets = await noaa_stations.check_offsets_required(params)
             stations = await noaa_stations.fetch_stations(
                 datasetid=self.datasetid,
                 locationid=locationid,
-                startdate=self.startdate,
-                enddate=self.enddate,
-                offsets=offsets
             )
 
             if stations and "metadata" in stations:
@@ -144,6 +171,9 @@ class NOAAData(Request):
                     
                     if result:
                         data = result['results']
+                        if save:
+                            save_data_to_csv(data, f"data_{station_id}.csv")
+                            logger.debug(f"Saved data to data_{station_id}.csv")
                         complete_dataset.extend(data)
 
                     stations_count += 1  # Increase stations counter
@@ -152,8 +182,8 @@ class NOAAData(Request):
 
             if verbose:
                 log_content = format_log_content(
-                    context="Data fetched" if complete_dataset else "Empty data",
-                    params=[("Total items", len(complete_dataset)), ("Stations", len(stationsids))])
+                    context="Location data" if complete_dataset else "Empty data",
+                    params=[("Total items", len(complete_dataset)), ("Stations", len(stationsids), ("Total successful requests", f"{self.success_count}/{self.requests_count}"))])
                 if complete_dataset:
                     logger.success(log_content)
                 else:
@@ -164,17 +194,71 @@ class NOAAData(Request):
         return complete_dataset
 
 
+    async def fetch_locationcategory_by_stations(
+        self,
+        locationcategoryid: str,
+        startdate: Optional[str]=None,
+        enddate: Optional[str]=None,
+        verbose: int=0,
+        save: bool=False,
+        cut_index: Optional[int]=None) -> list[dict[str, Any]]:
+        """Fetch data by location category ID."""
+
+        noaa_locations = NOAALocations()
+        locations = await noaa_locations.fetch_locations(
+            datasetid=datasetid,
+            locationcategoryid=locationcategoryid,
+            startdate=startdate or self.startdate,
+            enddate=enddate or self.enddate
+        )
+
+        if locations:
+            ids_names_dict = self.process_response_json(locations, "ids_names_dict")
+
+            # Ordered list of unique location IDs
+            locations_list = np.unique([location["id"] for location in locations["results"]])
+        else:
+            logger.debug("No locations found")
+        
+        output_file = f"data_{datasetid}_{startdate}_{enddate}.csv"
+
+        locations_list = locations_list[:cut_index] if cut_index else locations_list
+        for locationid in locations_list:
+            data = await self.fetch_location_by_stations(locationid=locationid)
+            if data:
+                if verbose:
+                    logger.success(format_log_content(params=[
+                        ("Country", ids_names_dict[locationid]),
+                        ("Total items", len(data)),
+                        ("Total successful requests", f"{self.success_count}/{self.requests_count}")]))
+                if save:
+                    save_data_to_csv(data, output_file)
+                    logger.debug(f"Saved data to {output_file}")
+            else:
+                logger.debug("Empty data")
+            self.save_whitelist()
+
+        return data
+
 if __name__ == "__main__":
     import asyncio
     import numpy as np
 
-    async def main(batch_init=0, batch_end=None):
-        WHITELIST_PATH = "whitelist.json"
-        datasetid = "GSOM"
-        locationcategoryid = "CNTRY"
-        startdate = "2020-01-01"
-        enddate = "2025-03-07"
+    WHITELIST_PATH = "whitelist.json"
 
+    datasetid = "GSOM"
+    locationcategoryid = "CNTRY"
+    startdate = "2000-01-01"
+    enddate = "2025-04-14"
+
+    loc_params = {
+        "datasetid": datasetid,
+        "locationcategoryid": locationcategoryid,
+        "startdate": startdate,
+        "enddate": enddate,
+    }
+
+    async def main():
         noaa_data = NOAAData(
             datasetid=datasetid,
             startdate=startdate,
@@ -185,46 +269,18 @@ if __name__ == "__main__":
             whitelist_title="CNTRY",
             whitelist_description="Stations' IDs and metadata for countries"
         )
-
-        # Get all the available locations in the 'CNTRY' category within the specified time range
-        loc_params = {
-            "datasetid": datasetid,
-            "locationcategoryid": locationcategoryid,
-            "startdate": startdate,
-            "enddate": enddate,
-        }
-
-        noaa_loc = NOAALocations()
-        offsets = await noaa_loc.check_offsets_required(loc_params)
-        locations = await noaa_loc.fetch_locations(
-            datasetid=datasetid,
+        data = await noaa_data.fetch_locationcategory_by_stations(
             locationcategoryid=locationcategoryid,
             startdate=startdate,
             enddate=enddate,
-            offsets=offsets
+            verbose=1,
+            save=True,
+            cut_index=2
         )
+        if data:
+            logger.debug(format_log_content(params=[("Total items", len(data))]))
 
-        if locations:
-            ids_names_dict = noaa_loc.process_response_json(locations, "ids_names_dict")
-
-            # Ordered list of unique location IDs
-            locations_list = np.unique([location["id"] for location in locations["results"]])
-        else:
-            logger.debug("No locations found")
-
-        locations_list = locations_list[batch_init:batch_end] if batch_end is not None else locations_list[batch_init:]
-        for locationid in locations_list:
-
-            data = await noaa_data.fetch_location_data_by_stations(locationid=locationid)
-
-            if data:
-                logger.success(format_log_content(params=[("Country", ids_names_dict[locationid]), ("Total items", len(data))]))
-            else:
-                logger.debug("Empty data")
-
-            noaa_data.save_whitelist()
-    
-    asyncio.run(main(batch_end=3))
+    asyncio.run(main())
 
 
 
