@@ -12,7 +12,7 @@ from utils.log import format_log_content
 load_dotenv()
 
 
-class Whitelist():
+class Whitelist:
     """
     A class that manages a whitelist with this structure: 
 
@@ -39,7 +39,7 @@ class Whitelist():
         whitelist_value: Optional[str]=None,
         whitelist_title: Optional[str]=None,
         whitelist_description: Optional[str]=None) -> None:
-        """Creates an instance of a Whitelist.
+        """Creates an instance of a whitelist.
 
         Args:
             whitelist_path (Optional[str], optional): The path to retrieve an existent whitelist or to save a new one. Defaults to None.
@@ -53,6 +53,7 @@ class Whitelist():
         self.whitelist_value = whitelist_value
         self.whitelist_title = whitelist_title
         self.whitelist_description = whitelist_description
+
         self.whitelist = self._create_or_load_whitelist()
 
         # Attributes to manage the whitelist from child classes
@@ -68,7 +69,6 @@ class Whitelist():
             dict: The whitelist JSON file.
         """
         if self._is_whitelist_ready():
-            log_params = [("Path", self.whitelist_path)]
             try:
                 if not os.path.exists(self.whitelist_path):
                     context = "Whitelist created"
@@ -97,12 +97,11 @@ class Whitelist():
                             },
                         }
                         logger.error("The whitelist could not be loaded. A new one was created.")
-                logger.info(format_log_content(context=context, params=log_params))
+                logger.info(context)
                 return whitelist
             except Exception:
-                logger.exception(msg="Whitelist could not be loaded or created")
-        else:
-            return {}
+                logger.exception(msg="whitelist could not be loaded or created")
+        return {}
 
 
     def _is_whitelist_ready(self) -> bool:
@@ -137,31 +136,21 @@ class Whitelist():
         info = {"items": metadata["items"], "size": parse_size_to_human_read(metadata["size"])}
         try:
             log_params = [("Key", key), ("Value", value)]
+
+            # When the key already exists in the whitelist and the value is new
             if key in self.whitelist.keys():
                 self.whitelist[key][value] = {"items": metadata["items"], "size": parse_size_to_human_read(metadata["size"])}
                 self.whitelist["metadata"][key]["count"] = f"{len(self.whitelist[key])}/{self.sub_whitelist_total_items}"
                 self.whitelist["metadata"][key]["size"] = parse_size_to_human_read(
                     parse_size(self.whitelist["metadata"][key]["size"]) + metadata["size"])
                 self.whitelist["metadata"][key]["items"] = self.whitelist["metadata"][key]["items"] + metadata["items"]
-    
-                if self.is_whitelist_last_item:
-                    self.whitelist["metadata"][key]["status"] = "C"
 
-                    logger.success(format_log_content(context="Whitelist complete", params=log_params))
 
-            elif self.is_whitelist_last_item:
+            # When the item is the first one from a set of items that will be added to the whitelist
+            # and the whitelist is not complete yet, it is marked as incomplete
+            else:
                 self.whitelist["metadata"][key] = {
-                    "status": "C",
-                    "count": "1/1",
-                    "size": parse_size_to_human_read(metadata["size"]),
-                    "items": metadata["items"]
-                }
-                self.whitelist[key] = {value: info}
-
-                logger.success(format_log_content(context="Whitelist complete", params=log_params))
-
-            elif not self.is_whitelist_last_item:
-                self.whitelist["metadata"][key] = {
+                    **metadata,
                     "status": "I",
                     "count": f"1/{self.sub_whitelist_total_items}",
                     "size": parse_size_to_human_read(metadata["size"]),
@@ -173,7 +162,7 @@ class Whitelist():
             self.whitelist["metadata"]["total_size"] = parse_size_to_human_read(parse_size(self.whitelist["metadata"]["total_size"]) + metadata["size"])
             self.whitelist["metadata"]["updated"] = datetime.now(timezone.utc).isoformat()
         except Exception:
-            logger.exception(format_log_content(context="Failed adding to whitelist", params=log_params))
+            logger.exception(format_log_content(context="Failed adding to whitelist", param_tuples=log_params))
 
 
     def retrieve_whitelist(self, target_key: Optional[str] = None) -> dict[str, list[str] | dict[str, str]]:
@@ -213,15 +202,28 @@ class Whitelist():
             try:
                 with open(self.whitelist_path, "w") as f:
                     json.dump(self.whitelist, f, indent=4)
-                logger.success(f"Whitelist saved to: {self.whitelist_path}")
+                logger.success(f"Whitelist saved to {self.whitelist_path}")
             except FileNotFoundError:
                 logger.error(f"File not found: {self.whitelist_path}")
         else:
             logger.debug("No whitelist to be saved")
 
 
+    def update_whitelist(self, key: str, status: str) -> None:
+        """Updates the status of a given whitelist key.
+
+        Args:
+            key (str): The key to be updated in the whitelist.
+            status (str): The new status of the whitelist key.
+        """
+        if key in self.whitelist["metadata"].keys():
+            self.whitelist["metadata"][key]["status"] = status
+            logger.success(f"Whitelist complete: {key}")
+        else:
+            logger.error(f"whitelist {key} not found")
+
 if __name__ == "__main__":
-    # Initialize the Whitelist with a file path
+    # Initialize the whitelist with a file path
     whitelist = Whitelist(whitelist_path="whitelist_test.json")
 
     # Add items to the whitelist
@@ -230,11 +232,11 @@ if __name__ == "__main__":
 
     # Retrieve a specific whitelist entry
     br_whitelist = whitelist.retrieve_whitelist("FIPS:BR")
-    print("BR Whitelist:", br_whitelist)
+    print("BR whitelist:", br_whitelist)
 
     # Retrieve the full whitelist
     full_whitelist = whitelist.retrieve_whitelist()
-    print("Full Whitelist:", full_whitelist)
+    print("Full whitelist:", full_whitelist)
 
     # Save the whitelist to file
     whitelist.save_whitelist()

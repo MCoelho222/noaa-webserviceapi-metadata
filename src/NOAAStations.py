@@ -43,7 +43,7 @@ class NOAAStations(Request):
         }
 
         params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
-        logger.info(format_log_content(context="Fetching stations...", params=params_list))
+        logger.info(format_log_content(context="Fetching stations...", param_tuples=params_list, only_values=True))
 
         calculated_offsets = offsets
         if offsets is None:
