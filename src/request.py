@@ -9,9 +9,10 @@ from loguru import logger
 
 from utils.log import format_log_content
 from whitelist import Whitelist
+from blacklist import Blacklist
 
 
-class Request(Whitelist):
+class Request(Whitelist, Blacklist):
     """
     Class for making HTTP GET requests to the NOAA Web Services API.
 
@@ -28,16 +29,21 @@ class Request(Whitelist):
     def __init__(
         self,
         endpoint: str,
+        blacklist_path: Optional[str]=None,
         whitelist_path: Optional[str]=None,
         whitelist_key: Optional[str]=None,
         whitelist_value: Optional[str]=None,
         whitelist_title: Optional[str]=None,
         whitelist_description: Optional[str]=None) -> None:
         super().__init__(whitelist_path, whitelist_key, whitelist_value, whitelist_title, whitelist_description)
+
+        Blacklist.__init__(self, blacklist_path)
+
         self.endpoint = endpoint
         self.requests_count = 0  # Counter for the number of requests made
         self.success_count = 0  # Counter for the number of successful requests
 
+        self.metadata = None  # Metadata from the response
 
     async def get(self, q_params: Optional[dict[str, str]]=None, max_retries: Optional[int]=5) -> Optional[dict]:
         """Asynchronous function for making HTTP GET requests to the NOAA Web Services API.
@@ -63,8 +69,12 @@ class Request(Whitelist):
 
         baseurl = os.getenv("NOAA_API_URL")  # Base URL for the NOAA Web Services API
         q_string = self.build_query_string_from_dict(q_params)
-        url = f"{baseurl}{self.endpoint}?{q_string}" if q_string else f"{baseurl}{self.endpoint}"
 
+        if self.is_blacklisted(q_string):
+            logger.debug(f"Blacklisted. Skipping...: {q_string}")
+            return None
+
+        url = f"{baseurl}{self.endpoint}?{q_string}" if q_string else f"{baseurl}{self.endpoint}"
         semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
         async with semaphore:
             await asyncio.sleep(0.2)  # Ensures ~5 requests per second
@@ -101,18 +111,18 @@ class Request(Whitelist):
                                 data = await res.json()
 
                                 if not data:
-                                    logger.debug("Empty data")
+                                    self.add_to_blacklist(q_string)
+
                                 elif "metadata" in data.keys():
                                     size_bytes = len(json.dumps(data["results"]).encode("utf-8"))  # Convert JSON to bytes
-                                    available = data["metadata"]["resultset"]["count"]
-                                    logger.success(format_log_content(params=[("Status", 200), ("Returned items", f"{len(data["results"])}/{available}")]))
 
                                     # The whitelist is used for the 'data' endpoint only
-                                    if self.endpoint == "data" and self.whitelist and not self.is_sub_whitelist_complete:
+                                    if self.whitelist and not self.is_sub_whitelist_complete:
                                         self.add_to_whitelist(
                                             key=q_params[self.whitelist_key],
                                             value=q_params[self.whitelist_value],
                                             metadata={
+                                                "name": self.metadata[q_params[self.whitelist_key]],
                                                 "items": len(data["results"]),
                                                 "size": size_bytes
                                             }
@@ -138,7 +148,7 @@ class Request(Whitelist):
         for offset in offsets:
             if offsets_length > 1:
                 q_params["offset"] = offset
-                logger.info(format_log_content(context=f"Fetching offset {count}/{offsets_length}...", params=[("Endpoint", self.endpoint)]))
+                logger.info(format_log_content(context=f"Fetching offset {count}/{offsets_length}..."))
 
             data = await self.get(q_params)
 
@@ -156,10 +166,9 @@ class Request(Whitelist):
 
     
     async def fetch_one_and_calculate_offsets(self, q_params: dict[str, Any]) -> list[int]:
-        logger.info("Fetching for offsets...")
         limited_q_params = q_params.copy()
         limited_q_params["limit"] = 1
-        result = await self.get(q_params)
+        result = await self.get(limited_q_params)
 
         if result:
             if result and "metadata" in result.keys():
@@ -233,15 +242,12 @@ class Request(Whitelist):
 
             if len(offsets) > 3:
                 content = f"[{offsets[0]}, {offsets[1]}, {offsets[2]}, ..., {offsets[-1]}]"
-            if len(offsets) == 3:
-                content = f"[{offsets[0]}, {offsets[1]}, ..., {offsets[-1]}]"
-            if len(offsets) == 2:
-                content = f"[{offsets[0]}, {offsets[-1]}]"
+            else:
+                content = f"[{", ".join(map(str, offsets))}]"
             
             logger.info("Using offsets: " + content)
             return offsets
 
-        logger.info("Offsets not required")
         return [0]
 
 if __name__ == "__main__":
