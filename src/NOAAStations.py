@@ -2,8 +2,6 @@ from typing import Optional
 from loguru import logger
 
 from request import Request
-from utils.data import list_of_tuples_from_dict
-from utils.log import format_log_content
 
 
 class NOAAStations(Request):
@@ -23,7 +21,7 @@ class NOAAStations(Request):
         sortfield: Optional[str]=None,
         sortorder: Optional[str]=None,
         limit: int=1000,
-        offsets: Optional[list[int]]=None) -> dict[str, str] | None:
+        offset: int=0) -> dict[str, str] | None:
         """Download the available stations according to the specified parameters.
 
         Returns:
@@ -42,15 +40,17 @@ class NOAAStations(Request):
             "limit": limit,
         }
 
-        params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
-        logger.info(format_log_content(context="Fetching stations...", param_tuples=params_list, only_values=True))
+        logger.info("Fetching stations...")
 
-        calculated_offsets = offsets
-        if offsets is None:
+        calculated_offsets = [offset]
+        if offset == 0:
             calculated_offsets = await self.fetch_one_and_calculate_offsets(params_dict)
+
+        if not calculated_offsets:
+            logger.debug("No locations found.")
+            return None
         
         data = await self.get_with_offsets(params_dict, calculated_offsets)
-
         return data
 
 

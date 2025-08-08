@@ -2,6 +2,9 @@
 .venv
 .vscode
 __pycache__
-whitelist.json
-whitelist_test.json
+
+# Ignore all JSON and CSV files
+*.json
 *.csv
+
+blacklist.txt

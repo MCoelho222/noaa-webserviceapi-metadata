@@ -1,4 +1,4 @@
-from datetime import datetime
+import json
 from typing import Any, Optional
 from loguru import logger
 
@@ -8,22 +8,15 @@ from request import Request
 from utils.data import list_of_tuples_from_dict, save_to_csv
 from utils.date import generate_year_date_range, is_more_than_10_years
 from utils.log import format_log_content
+from blacklist import Blacklist
+from whitelist import Whitelist
 
 
-class NOAAData(Request):
-    def __init__(
-        self,
-        datasetid: str,
-        startdate: str,
-        enddate: str,
-        blacklist_path: Optional[str]=None,
-        WHITElist_path: Optional[str]=None,
-        whitelist_key: Optional[str]=None,
-        whitelist_value: Optional[str]=None,
-        whitelist_title: Optional[str]=None,
-        whitelist_description: Optional[str]=None) -> None:
-        super().__init__("data", blacklist_path, WHITElist_path, whitelist_key, whitelist_value, whitelist_title, whitelist_description)
-
+class NOAAData(Request, Blacklist):
+    def __init__(self, datasetid: str, startdate: str, enddate: str, blacklist_path: Optional[str]=None) -> None:
+        super().__init__("data")
+        Blacklist.__init__(self, blacklist_path=blacklist_path)
+        
         self.datasetid = datasetid
         self.startdate = startdate
         self.enddate = enddate
@@ -34,11 +27,13 @@ class NOAAData(Request):
         stationid: Optional[str]=None,
         datatypeid: Optional[str]=None,
         locationid: Optional[str]=None,
+        startdate: Optional[str]=None,
+        enddate: Optional[str]=None,
         units: Optional[str]=None,
         sortfield: Optional[str]=None,
         sortorder: Optional[str]=None,
         limit: int=1000,
-        offsets: Optional[list[int]]=None,
+        offset: int=0,
         includemetadata: Optional[bool]=True) -> dict[str, str] | None:
         """Fetch the data from the NOAA API.
 
@@ -47,8 +42,8 @@ class NOAAData(Request):
         """
         params_dict = {
             "datasetid": self.datasetid,
-            "startdate": self.startdate,
-            "enddate": self.enddate,
+            "startdate": startdate if startdate else self.startdate,
+            "enddate": enddate if enddate else self.enddate,
             "stationid": stationid,
             "datatypeid": datatypeid,
             "locationid": locationid,
@@ -59,14 +54,7 @@ class NOAAData(Request):
             "includemetadata": includemetadata,
         }
 
-        # Check if the whitelist is enabled and if the keys are present in the params_dict
-        if self.whitelist:
-            if self.whitelist_key not in params_dict.keys():
-                raise ValueError("whitelist key should be in the query parameters")
-            if self.whitelist_value not in params_dict.keys():
-                raise ValueError("whitelist value should be in the query parameters")
-
-        calculated_offsets = offsets
+        calculated_offsets = [offset]
 
         # Check if the date range is more than 10 years
         # If so, split the date range into 10-year intervals
@@ -82,39 +70,70 @@ class NOAAData(Request):
             for start, end in ten_year_ranges:
                 params_dict["startdate"] = start
                 params_dict["enddate"] = end
+                
                 params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
+                if self.is_blacklisted(self.build_query_string_from_dict(params_dict)):
+                    logger.debug(format_log_content(context="Blacklisted. Skipping...", param_tuples=params_list, only_values=True))
+                    continue
+                
                 logger.info(format_log_content(context="Fetching data...", param_tuples=params_list, only_values=True))
 
-                if offsets is None:
+                if offset == 0:
                     calculated_offsets = await self.fetch_one_and_calculate_offsets(params_dict)
+                    if calculated_offsets is None:
+                        logger.debug(f"No data found for range: {start} to {end}")
+                        self.add_to_blacklist(self.build_query_string_from_dict(params_dict))
+                        continue
 
                 range_data = await self.get_with_offsets(params_dict, calculated_offsets)
-                if range_data and "metadata" in range_data:
+                if range_data is None:
+                    logger.debug(f"No data found for range: {start} to {end}")
+                    self.add_to_blacklist(self.build_query_string_from_dict(params_dict))
+                    continue
+
+                if "metadata" in range_data.keys():
                     available = range_data["metadata"]["resultset"]["count"]
-                    logger.success(format_log_content(context=f"Data found for range {start} to {end}", param_tuples=[("Returned items", f"{len(range_data["results"])}/{available}")]))
+                    logger.success(
+                        format_log_content(
+                            context=f"Data found for range {start} to {end}",
+                            param_tuples=[("Returned items", f"{len(range_data["results"])}/{available}")]))
+
                     if not data["metadata"]:
                         data["metadata"] = range_data["metadata"]
+
                     data["results"].extend(range_data["results"])
-                else:
-                    logger.debug(f"No data found for range: {start} to {end}")
         else:
             params_list = list_of_tuples_from_dict(params_dict, exclude_none=True)
+            if self.is_blacklisted(self.build_query_string_from_dict(params_dict)):
+                logger.debug(format_log_content(context="Blacklisted URL. Skipping...", param_tuples=params_list, only_values=True))
+                return None
             logger.info(format_log_content(context="Fetching data...", param_tuples=params_list, only_values=True))
 
-            if offsets is None:
+            if offset == 0:
                 calculated_offsets = await self.fetch_one_and_calculate_offsets(params_dict)
+                if calculated_offsets is None:
+                    logger.debug(f"No data found for range: {startdate} to {enddate}")
+                    self.add_to_blacklist(self.build_query_string_from_dict(params_dict))
+                    return None
+            
             data = await self.get_with_offsets(params_dict, calculated_offsets)
-
+            if not data:
+                logger.debug("I WAS USED")
+                self.add_to_blacklist(self.build_query_string_from_dict(params_dict))
+                return None
         return data
 
 
     async def fetch_location_by_stations(
-            self,
-            locationid: str,
-            startdate: Optional[str]=None,
-            enddate: Optional[str]=None,
-            verbose: Optional[bool]=0,
-            save: bool=False) -> list[dict[str, Any]]:
+        self,
+        locationid: str,
+        startdate: Optional[str]=None,
+        enddate: Optional[str]=None,
+        verbose: Optional[bool]=0,
+        save: bool=False,
+        use_whitelist: bool=True,
+        wl_target: str="locationcategoryid",
+        wl_description: str="CNTRY") -> list[dict[str, Any]]:
         """Fetches data from a specific location using stations to
         avoid heavy loads in requests.
 
@@ -134,59 +153,69 @@ class NOAAData(Request):
             ValueError: If `startdate` is after `enddate`.
             FileNotFoundError: If the whitelist file is not found.
         """
-        # Validate dates
-        start = datetime.strptime(startdate or self.startdate, "%Y-%m-%d")
-        end = datetime.strptime(enddate or self.enddate, "%Y-%m-%d")
-        if start > end:
-            raise ValueError("Start date must be before end date")
-
         stationsids = None
 
-        # Try to retrieve whitelist for the given location (e.g., 'BR')
-        whitelist = self.retrieve_whitelist(locationid)
+        if use_whitelist:
+            wl_path = f"whitelist/{wl_description}_whitelist.json"
+            wl = Whitelist(wl_path, wl_target, wl_description)
 
-        # If the location's whitelist is complete,
-        # redefine'stationids' to include only the ones in the whitelist
-        if whitelist and whitelist["metadata"]["status"] == "C":
-            stationsids = whitelist[locationid]
+            # Try to retrieve whitelist for the given location (e.g., 'BR')
+            whitelist = wl.retrieve_whitelist(locationid)
 
-            # This tells Request's 'get' method no item should be added to the whitelist for this location
-            self.is_sub_whitelist_complete = True
-        else:
-            noaa_stations = NOAAStations()
-            stations = await noaa_stations.fetch_stations(
-                datasetid=self.datasetid,
-                locationid=locationid,
-            )
+            # If the location's whitelist is complete,
+            # redefine'stationids' to include only the ones in the whitelist
+            if whitelist and whitelist["metadata"]["status"] == "Complete":
+                wl.is_sub_whitelist_complete = True
+                stationsids = whitelist[locationid]
 
-            if stations and "metadata" in stations:
-                stationsids = [station["id"] for station in stations["results"]] \
-                      if len(stations["results"]) > 1 else [stations["results"][0]["id"],]
             else:
-                logger.debug(f"No stations found for location: {locationid}")
-                return None
+                noaa_stations = NOAAStations()
+                stations = await noaa_stations.fetch_stations(
+                    datasetid=self.datasetid,
+                    locationid=locationid,
+                )
+
+                if stations and "metadata" in stations:
+                    stationsids = [station["id"] for station in stations["results"]] \
+                        if len(stations["results"]) > 1 else [stations["results"][0]["id"],]
+                else:
+                    logger.debug(f"No stations found for location: {locationid}")
+                    return None
 
         complete_dataset = []  # Store all the data
 
         if stationsids:
-            stations_count = 1  # Track whether all stations have been screened
-            self.sub_whitelist_total_items = len(stationsids)
+            total_items = len(stationsids)
             for station_id in stationsids:
                 try:
-                    result = await self.fetch_data(stationid=station_id, locationid=locationid)
-                    
-                    if result:
-                        data = result['results']
-                        if save:
-                            save_to_csv(data, f"data_{station_id}.csv")
-                            logger.debug(f"Saved data to data_{station_id}.csv")
-                        complete_dataset.extend(data)
+                    data = await self.fetch_data(stationid=station_id, locationid=locationid, startdate=startdate, enddate=enddate)
 
-                    stations_count += 1
+                    if data and data['results']:
+                        results = data['results']
+
+                        # The whitelist is used for the 'data' endpoint only
+                        if use_whitelist and not wl.is_sub_whitelist_complete:
+                            wl.sub_whitelist_total_items = total_items
+                            size_bytes = len(json.dumps(results).encode("utf-8"))  # Convert JSON to bytes
+                            wl.add_to_whitelist(
+                                key=locationid,
+                                value=station_id,
+                                metadata={
+                                    "name": self.metadata[locationid],
+                                    "items": len(results),
+                                    "size": size_bytes
+                                }
+                            )
+                        if save:
+                            save_to_csv(results, f"data_{station_id}.csv")
+                            logger.debug(f"Saved data to data_{station_id}.csv")
+                        complete_dataset.extend(results)
                 except Exception:
                     logger.exception(f"Failed to fetch data for station {station_id}")
 
-            self.update_whitelist(locationid, "C")
+            if use_whitelist and not wl.is_sub_whitelist_complete:
+                wl.update_whitelist(locationid, "Complete")
+                wl.save_whitelist()
 
             if verbose:
                 log_content = format_log_content(
@@ -197,8 +226,7 @@ class NOAAData(Request):
                 else:
                     logger.debug(log_content)
 
-        self.reset_whitelist()
-
+        self.save_blacklist()
         return complete_dataset
 
 
@@ -208,8 +236,12 @@ class NOAAData(Request):
         startdate: Optional[str]=None,
         enddate: Optional[str]=None,
         verbose: int=0,
+        use_whitelist: bool=True,
+        wl_target: str="locationcategoryid",
+        wl_description: str="CNTRY",
         save: bool=False,
-        cut_index: Optional[int]=None) -> list[dict[str, Any]]:
+        cut_index: Optional[int]=None
+        ) -> list[dict[str, Any]]:
         """Fetch data by location category ID."""
 
         noaa_locations = NOAALocations()
@@ -233,7 +265,12 @@ class NOAAData(Request):
 
         locations_list = locations_list[:cut_index] if cut_index else locations_list
         for locationid in locations_list:
-            data = await self.fetch_location_by_stations(locationid=locationid)
+            data = await self.fetch_location_by_stations(
+                locationid=locationid,
+                use_whitelist=use_whitelist,
+                wl_target=wl_target,
+                wl_description=wl_description
+            )
             if data:
                 if verbose:
                     logger.success(format_log_content(param_tuples=[
@@ -251,20 +288,12 @@ if __name__ == "__main__":
     import asyncio
     import numpy as np
 
-    WHITELIST_PATH = "whitelist.json"
     BLACKLIST_PATH = "blacklist.txt"
 
     datasetid = "GSOM"
     locationcategoryid = "CNTRY"
     startdate = "2000-01-01"
-    enddate = "2025-04-14"
-
-    loc_params = {
-        "datasetid": datasetid,
-        "locationcategoryid": locationcategoryid,
-        "startdate": startdate,
-        "enddate": enddate,
-    }
+    enddate = "2025-08-08"
 
     async def main():
         noaa_data = NOAAData(
@@ -272,22 +301,16 @@ if __name__ == "__main__":
             startdate=startdate,
             enddate=enddate,
             blacklist_path=BLACKLIST_PATH,
-            WHITElist_path=WHITELIST_PATH,
-            whitelist_key="locationid",
-            whitelist_value="stationid",
-            whitelist_title="CNTRY",
-            whitelist_description="Stations' IDs and metadata for countries"
         )
         await noaa_data.fetch_locationcategory_by_stations(
             locationcategoryid=locationcategoryid,
             startdate=startdate,
             enddate=enddate,
+            use_whitelist=True,
             verbose=1,
             save=True,
-            cut_index=2
+            cut_index=3
         )
-        noaa_data.save_blacklist()
-        noaa_data.save_whitelist()
 
     asyncio.run(main())
 

@@ -1,18 +1,14 @@
 import aiohttp
 import asyncio
 import os
-import json
 import numpy as np
+
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
 from loguru import logger
 
-from utils.log import format_log_content
-from whitelist import Whitelist
-from blacklist import Blacklist
 
-
-class Request(Whitelist, Blacklist):
+class Request():
     """
     Class for making HTTP GET requests to the NOAA Web Services API.
 
@@ -21,23 +17,12 @@ class Request(Whitelist, Blacklist):
 
     Attributes:
         endpoint (str): The endpoint to be fetched.
-        whitelist_path (str, optional): The path where the whitelist should be saved or loaded from.
+        wl_path (str, optional): The path where the whitelist should be saved or loaded from.
             If not provided, whitelist will not be used.
         whitelist_key (str, optional): The query parameter that represents a key in the whitelist.
         whitelist_value (str, optional): The query parameter that represents a value in the whitelist.
     """
-    def __init__(
-        self,
-        endpoint: str,
-        blacklist_path: Optional[str]=None,
-        whitelist_path: Optional[str]=None,
-        whitelist_key: Optional[str]=None,
-        whitelist_value: Optional[str]=None,
-        whitelist_title: Optional[str]=None,
-        whitelist_description: Optional[str]=None) -> None:
-        super().__init__(whitelist_path, whitelist_key, whitelist_value, whitelist_title, whitelist_description)
-
-        Blacklist.__init__(self, blacklist_path)
+    def __init__(self, endpoint: str) -> None:
 
         self.endpoint = endpoint
         self.requests_count = 0  # Counter for the number of requests made
@@ -70,10 +55,6 @@ class Request(Whitelist, Blacklist):
         baseurl = os.getenv("NOAA_API_URL")  # Base URL for the NOAA Web Services API
         q_string = self.build_query_string_from_dict(q_params)
 
-        if self.is_blacklisted(q_string):
-            logger.debug(f"Blacklisted. Skipping...: {q_string}")
-            return None
-
         url = f"{baseurl}{self.endpoint}?{q_string}" if q_string else f"{baseurl}{self.endpoint}"
         semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
         async with semaphore:
@@ -83,50 +64,22 @@ class Request(Whitelist, Blacklist):
                     try:
                         async with session.get(url, headers={"token": token}) as res:
                             self.requests_count += 1  # Increment the request count
+
                             if res.status == 503:
                                 wait_time = 2 ** attempt  # Exponential backoff
                                 logger.debug(f"503 Service Unavailable. Retrying {attempt + 1}/{max_retries} in {wait_time} seconds...")
                                 await asyncio.sleep(wait_time)
                                 continue  # Retry the request
+
                             if res.status != 200:
-                                try:
-                                    error_text = await res.text()
-
-                                    # Parse XML and extract <developerMessage>
-                                    try:
-                                        root = ET.fromstring(error_text)
-                                        dev_msg = root.findtext('developerMessage')
-                                        message = dev_msg or "Unknown error"
-                                    except ET.ParseError:
-                                        message = f"Unparseable XML: {error_text}"
-
-                                except Exception as e:
-                                    message = f"Could not read response body: {e}"
-
+                                res_text = await res.text()
+                                message = self.parse_res_text(res_text)
                                 logger.error(f"Status {res.status}: {message}")
                                 return None
 
                             try:  # If status code is 200, try to parse the JSON response
                                 self.success_count += 1  # Increment the success count
                                 data = await res.json()
-
-                                if not data:
-                                    self.add_to_blacklist(q_string)
-
-                                elif "metadata" in data.keys():
-                                    size_bytes = len(json.dumps(data["results"]).encode("utf-8"))  # Convert JSON to bytes
-
-                                    # The whitelist is used for the 'data' endpoint only
-                                    if self.whitelist and not self.is_sub_whitelist_complete:
-                                        self.add_to_whitelist(
-                                            key=q_params[self.whitelist_key],
-                                            value=q_params[self.whitelist_value],
-                                            metadata={
-                                                "name": self.metadata[q_params[self.whitelist_key]],
-                                                "items": len(data["results"]),
-                                                "size": size_bytes
-                                            }
-                                        )
                                 return data
                             except aiohttp.ContentTypeError:
                                 logger.error("Failed to parse JSON response")
@@ -148,7 +101,7 @@ class Request(Whitelist, Blacklist):
         for offset in offsets:
             if offsets_length > 1:
                 q_params["offset"] = offset
-                logger.info(format_log_content(context=f"Fetching offset {count}/{offsets_length}..."))
+                logger.info(f"Fetching offset {count}/{offsets_length}...")
 
             data = await self.get(q_params)
 
@@ -158,10 +111,8 @@ class Request(Whitelist, Blacklist):
                 results.extend(data["results"])
 
             count += 1
-
         if results:
             all_data["results"] = results
-
         return all_data
 
     
@@ -170,14 +121,10 @@ class Request(Whitelist, Blacklist):
         limited_q_params["limit"] = 1
         result = await self.get(limited_q_params)
 
-        if result:
-            if result and "metadata" in result.keys():
+        if result and "metadata" in result.keys():
                 count = result["metadata"]["resultset"]["count"]
-
-                return self.calculate_offsets(int(count))
-        
-        logger.debug("Empty data or 'metadata' not in response")
-        return [0]
+                return self.calculate_offsets(int(count))  
+        return None
 
 
     @staticmethod
@@ -244,11 +191,24 @@ class Request(Whitelist, Blacklist):
                 content = f"[{offsets[0]}, {offsets[1]}, {offsets[2]}, ..., {offsets[-1]}]"
             else:
                 content = f"[{", ".join(map(str, offsets))}]"
-            
             logger.info("Using offsets: " + content)
             return offsets
-
         return [0]
+    
+
+    def parse_res_text(self, res_text: str) -> dict[str, str]:
+        try:
+            # Parse XML and extract <developerMessage>
+            try:
+                root = ET.fromstring(res_text)
+                dev_msg = root.findtext('developerMessage')
+                message = dev_msg or "Unknown error"
+            except ET.ParseError:
+                message = f"Unparseable XML: {res_text}"
+        except Exception as e:
+            message = f"Could not read response body: {e}"
+        return message
+
 
 if __name__ == "__main__":
     import time

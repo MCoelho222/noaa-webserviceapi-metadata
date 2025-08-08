@@ -32,33 +32,24 @@ class Whitelist:
     "complete" and "I" for "incomplete". A key's whitelist is complete when all the available
     values related to a key have been fetched and verified regarding their data content.
     """
-    def __init__(
-        self,
-        whitelist_path: Optional[str]=None,
-        whitelist_key: Optional[str]=None,
-        whitelist_value: Optional[str]=None,
-        whitelist_title: Optional[str]=None,
-        whitelist_description: Optional[str]=None) -> None:
+    def __init__(self, wl_path: str, wl_target: Optional[str]=None, wl_description: Optional[str]=None) -> None:
         """Creates an instance of a whitelist.
 
         Args:
-            whitelist_path (Optional[str], optional): The path to retrieve an existent whitelist or to save a new one. Defaults to None.
+            wl_path (Optional[str], optional): The path to retrieve an existent whitelist or to save a new one. Defaults to None.
             whitelist_key (Optional[str], optional): One of the query parameters from the URL to be used as the key that holds a whitelist,
                 e.g., 'stationid' or 'locationid'. Defaults to None.
             whitelist_value (Optional[str], optional): One of the query parameters from the URL to be used as the values inside a whitelist,
                 e.g., 'stationid' or 'locationid'. Defaults to None.
         """
-        self.whitelist_path = whitelist_path
-        self.whitelist_key = whitelist_key
-        self.whitelist_value = whitelist_value
-        self.whitelist_title = whitelist_title
-        self.whitelist_description = whitelist_description
+        self.wl_path = wl_path
+        self.wl_target = wl_target
+        self.wl_description = wl_description
 
         self.whitelist = self._create_or_load_whitelist()
 
         # Attributes to manage the whitelist from child classes
         self.is_sub_whitelist_complete = False
-        self.is_whitelist_last_item = False  # Used to track whether a new item is the last one from a whitelist
         self.sub_whitelist_total_items = 0
         
 
@@ -68,63 +59,30 @@ class Whitelist:
         Returns:
             dict: The whitelist JSON file.
         """
-        if self._is_whitelist_ready():
+        if os.path.exists(self.wl_path):
             try:
-                if not os.path.exists(self.whitelist_path):
-                    context = "Whitelist created"
-                    whitelist = {
-                        "title": self.whitelist_title if self.whitelist_title else "",
-                        "description": self.whitelist_description if self.whitelist_description else "",
-                        "metadata": {
-                            "created": datetime.now(timezone.utc).isoformat(),
-                            "updated": datetime.now(timezone.utc).isoformat(),
-                            "total_items": 0,
-                            "total_size": "0 B"
-                        },
-                    }
-                else:
-                    try:
-                        context = "Whitelist loaded"
-                        with open(self.whitelist_path, "r") as f:
-                            whitelist = json.load(f)
-                    except (json.JSONDecodeError, FileNotFoundError):
-                        whitelist = {
-                            "metadata": {
-                                "created": datetime.now(timezone.utc).isoformat(),
-                                "updated": datetime.now(timezone.utc).isoformat(),
-                                "total_items": 0,
-                                "total_size": "0 B"
-                            },
-                        }
-                        logger.error("The whitelist could not be loaded. A new one was created.")
-                logger.info(context)
-                return whitelist
-            except Exception:
-                logger.exception(msg="whitelist could not be loaded or created")
-        return {}
+                context = "Whitelist loaded"
+                with open(self.wl_path, "r") as f:
+                    logger.info(context)
+                    return json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                logger.error("Whitelist could not be loaded.")
+                return None
 
+        context = "Whitelist created"
+        whitelist = {
+            "target": self.wl_target if self.wl_target else "",
+            "description": self.wl_description if self.wl_description else "",
+            "metadata": {
+                "created": datetime.now(timezone.utc).isoformat(),
+                "updated": datetime.now(timezone.utc).isoformat(),
+                "total_items": 0,
+                "total_size": "0 B"
+            },
+        }
 
-    def _is_whitelist_ready(self) -> bool:
-        """Checks if the whitelist is ready to be used.
-
-        Is a whitelist path defined?
-        Are both a key and value defined?
-        Are both key and value defined in the URL query parameters?
-
-        Args:
-            params (list[tuple[str, str]]): The query parameters.
-
-        Returns:
-            bool: True if the whitelist is ready, False otherwise.
-        """
-        if not self.whitelist_path:
-            return False
-        elif not self.whitelist_key or not self.whitelist_value:
-            logger.error("Both 'whitelist_key' and 'whitelist_value' must be provided")
-            return False
-
-        return True
-
+        return whitelist
+            
 
     def add_to_whitelist(self, key: str, value: str, metadata: dict[str, str | int]) -> None:
         """Includes an item in the whitelist.
@@ -151,7 +109,7 @@ class Whitelist:
             else:
                 self.whitelist["metadata"][key] = {
                     **metadata,
-                    "status": "I",
+                    "status": "Incomplete",
                     "count": f"1/{self.sub_whitelist_total_items}",
                     "size": parse_size_to_human_read(metadata["size"]),
                     "items": metadata["items"]
@@ -200,11 +158,12 @@ class Whitelist:
         """Saves the whitelist."""
         if self.whitelist:
             try:
-                with open(self.whitelist_path, "w") as f:
+                os.makedirs(os.path.dirname(self.wl_path), exist_ok=True)
+                with open(self.wl_path, "w") as f:
                     json.dump(self.whitelist, f, indent=4)
-                logger.success(f"Whitelist saved to {self.whitelist_path}")
+                logger.success(f"Whitelist saved to {self.wl_path}")
             except FileNotFoundError:
-                logger.error(f"File not found: {self.whitelist_path}")
+                logger.error(f"File not found: {self.wl_path}")
         else:
             logger.debug("No whitelist to be saved")
 
@@ -224,7 +183,7 @@ class Whitelist:
 
 if __name__ == "__main__":
     # Initialize the whitelist with a file path
-    whitelist = Whitelist(whitelist_path="whitelist_test.json")
+    whitelist = Whitelist(wl_path="whitelist_test.json")
 
     # Add items to the whitelist
     whitelist.add_to_whitelist("FIPS:BR", "GHCND:BR000352000")
