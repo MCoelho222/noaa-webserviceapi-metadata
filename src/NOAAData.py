@@ -293,14 +293,7 @@ if __name__ == "__main__":
     datasetid = "GSOM"
     locationcategoryid = "CNTRY"
     startdate = "2000-01-01"
-    enddate = "2025-04-14"
-
-    loc_params = {
-        "datasetid": datasetid,
-        "locationcategoryid": locationcategoryid,
-        "startdate": startdate,
-        "enddate": enddate,
-    }
+    enddate = "2025-08-08"
 
     async def main():
         noaa_data = NOAAData(
